@@ -1,2 +1,3 @@
 # PlaceChat-Team
-PlaceChat is an anonymous, campus location-based chat platform for college students.
+
+PlaceChat is an anonymous, campus location-based chat platform for college students. When students open the website, they automatically receive a random anonymous identity and can join chat rooms tied to real campus locations, such as libraries, student unions, and academic buildings, to talk in real time with people nearby without registering. Students who create an optional account can also add friends and send direct messages. The platform also supports campus announcements from student organizations, and gives administrators tools to handle reports, remove inappropriate messages, and ban users, so the community stays safe while students remain anonymous.
