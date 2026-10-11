@@ -1,0 +1,7 @@
+# Keep LF line endings in the repository and in every working tree, so Prettier and
+# ruff format give the same result on Windows and macOS.
+* text=auto eol=lf
+
+*.ico binary
+*.png binary
+*.jpg binary
