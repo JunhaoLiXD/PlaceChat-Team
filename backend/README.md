@@ -30,4 +30,4 @@ pytest
 | `app/modules/` | Business rules: `rooms/`, `nicknames/`, `messaging/`, `safety/` |
 | `tests/` | pytest tests |
 
-The module contracts from PlaceChat Technical Design (§3.4) already exist as stubs. Each owner replaces their stub in their own PBI; the docstring of each stub names the owner and the issue. Functions that touch the database take the request's SQLAlchemy session as their first argument, `db`.
+The module contracts from [PlaceChat Technical Design §3.4](../docs/technical-design.md#34-module-contracts) already exist as stubs. Each owner replaces their stub in their own PBI; the docstring of each stub names the owner and the issue. Functions that touch the database take the request's SQLAlchemy session as their first argument, `db`.

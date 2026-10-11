@@ -20,6 +20,7 @@ Optional accounts, friends, direct messages, and campus announcements from stude
 | [`backend/`](backend/) | FastAPI app |
 | [`supabase/migrations/`](supabase/) | Database schema and policies |
 | [`tools/loadtest/`](tools/loadtest/) | Load test script |
+| [`docs/`](docs/) | [PlaceChat Technical Design](docs/technical-design.md): the architecture, API contract, and decisions every PR follows |
 
 ## Run locally
 

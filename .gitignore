@@ -20,7 +20,7 @@ __pycache__/
 *.egg-info/
 
 # Local course documents (kept out of GitHub)
-/docs/
+/docs/course/
 
 # Editors / OS
 .vscode/
