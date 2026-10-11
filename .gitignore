@@ -16,6 +16,11 @@ __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local course documents (kept out of GitHub)
+/docs/
 
 # Editors / OS
 .vscode/
