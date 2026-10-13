@@ -89,9 +89,7 @@ ANIMALS = (
     "Zebra",
 )
 
-_COMBINATIONS = tuple(
-    f"{adjective} {animal}" for adjective, animal in product(ADJECTIVES, ANIMALS)
-)
+_COMBINATIONS = tuple(f"{adjective} {animal}" for adjective, animal in product(ADJECTIVES, ANIMALS))
 
 
 def generate_nickname(taken: set[str]) -> str:
