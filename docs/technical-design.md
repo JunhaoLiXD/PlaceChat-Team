@@ -1,6 +1,6 @@
 # PlaceChat Technical Design
 
-Final technical plan for Sprints 1 and 2 · CEN3031 Group 4 (10700) · Version 1.3 · October 11, 2026
+Final technical plan for Sprints 1 and 2 · CEN3031 Group 4 (10700) · Version 1.4 · October 13, 2026
 
 Prepared by Junhao Li (Product Manager) for Zhijie Yuan, Yufei Xiao, and Chuks Ofojuah.
 
@@ -423,7 +423,7 @@ PlaceChat-Team/
 |---|---|
 | Frontend (Vercel) | `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` |
 | Backend (Render) | `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `CORS_ORIGINS`, plus the settings in [Section 11](#11-settings) |
-| GitHub Actions secrets | `SUPABASE_ACCESS_TOKEN`, `SUPABASE_STAGING_PROJECT_REF`, `SUPABASE_STAGING_DB_PASSWORD`, plus the matching production secrets in a `production` environment |
+| GitHub Actions secrets | `SUPABASE_STAGING_DB_URL` (the staging session pooler connection string, the same value as the backend's `DATABASE_URL`), plus `SUPABASE_PRODUCTION_DB_URL` in a `production` environment |
 
 ### 9.5 Continuous integration (PBI-02)
 
@@ -513,3 +513,4 @@ These platform and board tasks belong to PBI-01, PBI-02, and PBI-05:
 | 1.1 | Oct 7, 2026 | Final. Every decision made, and Supabase/Render details checked against current docs: new API keys, JWKS verification, session pooler, Realtime REST broadcast. Product rules added, retention set to 7 days, setup checklist added. |
 | 1.2 | Oct 7, 2026 | A3 refined (Sprint 2): "Near you" section within 500 m, GPS-based location with Wi-Fi/network fallback, approximate distances, automatic sorting once permission is granted. All rooms remain joinable. |
 | 1.3 | Oct 11, 2026 | Moved into the repository as Markdown; this file is now the only maintained copy. Module contracts take `db` as their first argument when they touch the database. Section 10 lists the final assignments only. |
+| 1.4 | Oct 13, 2026 | The migration workflow connects with the session pooler connection string (`supabase db push --db-url`) instead of a Supabase access token and `supabase link`, which needs read access to many unrelated project settings. Its GitHub secrets are now one connection string per environment (Section 9.4). |

@@ -21,14 +21,14 @@ concurrency:
 jobs:
   staging:
     runs-on: ubuntu-latest
+    # Connects straight to the database with the session pooler connection string (port 5432,
+    # IPv4, password percent-encoded). No Supabase platform token: `supabase link` would need
+    # read access to many project settings that a migration never uses.
     env:
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_STAGING_DB_PASSWORD }}
-      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_STAGING_PROJECT_REF }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_STAGING_DB_URL }}
     steps:
       - uses: actions/checkout@v7
       - uses: supabase/setup-cli@v3
         with:
           version: 2.118.0
-      - run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
-      - run: supabase db push --yes
+      - run: supabase db push --db-url "$SUPABASE_DB_URL" --yes
