@@ -29,5 +29,6 @@ pytest
 | `app/core/` | Settings, database session, error format, auth, Realtime publisher |
 | `app/modules/` | Business rules: `rooms/`, `nicknames/`, `messaging/`, `safety/` |
 | `tests/` | pytest tests |
+| `scripts/export_openapi.py` | Exports the OpenAPI schema for the frontend's generated API types. Changed a route or a Pydantic model? See [API types](../frontend/README.md#api-types) |
 
 The module contracts from [PlaceChat Technical Design §3.4](../docs/technical-design.md#34-module-contracts) already exist as stubs. Each owner replaces their stub in their own PBI; the docstring of each stub names the owner and the issue. Functions that touch the database take the request's SQLAlchemy session as their first argument, `db`.
