@@ -13,7 +13,7 @@
 2. Create a branch from the latest `main`.
 3. Commit your work with clear messages.
 4. Open a pull request into `main` and link the issue (`Closes #<number>`).
-5. At least one teammate reviews and approves. All review comments must be resolved.
+5. The `ci` checks (`frontend`, `backend`, `api-types`) pass, and at least one teammate reviews and approves. All review comments must be resolved. Each app's README lists the same checks so you can run them before pushing.
 6. Merge the pull request and delete the branch.
 
 ## Commit Messages
