@@ -24,10 +24,55 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/rooms": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Rooms */
+    get: operations["get_rooms_api_v1_rooms_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
-  schemas: never;
+  schemas: {
+    /** RoomResponse */
+    RoomResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Name */
+      name: string;
+      /** Description */
+      description: string;
+      /**
+       * Category
+       * @enum {string}
+       */
+      category:
+        "library" | "dining" | "student life" | "academic" | "recreation";
+      /** Latitude */
+      latitude: number;
+      /** Longitude */
+      longitude: number;
+      /**
+       * Participant Count
+       * @default 0
+       */
+      participant_count: number;
+    };
+  };
   responses: never;
   parameters: never;
   requestBodies: never;
@@ -54,6 +99,26 @@ export interface operations {
           "application/json": {
             [key: string]: string;
           };
+        };
+      };
+    };
+  };
+  get_rooms_api_v1_rooms_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RoomResponse"][];
         };
       };
     };
