@@ -8,6 +8,14 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session as DbSession
 
+from app.modules.rooms import repository
+from app.modules.rooms.schemas import RoomResponse
+
+
+def list_rooms(db: DbSession) -> list[RoomResponse]:
+    """List active rooms; counts stay zero until membership is implemented."""
+    return [RoomResponse.model_validate(room) for room in repository.list_active_rooms(db)]
+
 
 @dataclass(frozen=True)
 class Membership:
