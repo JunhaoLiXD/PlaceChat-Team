@@ -1,5 +1,5 @@
 import { MOCK_ROOMS } from "@/lib/mock-data";
-import { publicConfig } from "@/lib/config";
+import { publicConfig, shouldUseMocks } from "@/lib/config";
 import type {
   ApiErrorBody,
   ChatMessage,
@@ -54,20 +54,15 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function listRooms(): Promise<RoomSummary[]> {
-  try {
-    return await apiFetch<RoomSummary[]>("/api/v1/rooms", {
-      cache: "no-store",
-    });
-  } catch (error) {
-    // PBI-04 owns this endpoint. Keep PBI-03 reviewable before that dependency lands.
-    if (
-      error instanceof ApiRequestError &&
-      (error.status === 0 || error.status === 404)
-    ) {
-      return MOCK_ROOMS;
-    }
-    throw error;
+  // PBI-04 owns this endpoint. Local development can opt into deterministic rooms
+  // until it lands, but configured deployments must surface real API failures.
+  if (shouldUseMocks()) {
+    return MOCK_ROOMS;
   }
+
+  return apiFetch<RoomSummary[]>("/api/v1/rooms", {
+    cache: "no-store",
+  });
 }
 
 export async function joinRoom(
