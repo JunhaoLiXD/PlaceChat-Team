@@ -41,10 +41,120 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/admin/rooms": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Create Room */
+    post: operations["create_room_api_v1_admin_rooms_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/rooms/{room_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Update Room */
+    patch: operations["update_room_api_v1_admin_rooms__room_id__patch"];
+    trace?: never;
+  };
+  "/api/v1/admin/rooms/{room_id}/archive": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Archive Room */
+    post: operations["archive_room_api_v1_admin_rooms__room_id__archive_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    /** AdminRoomResponse */
+    AdminRoomResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Name */
+      name: string;
+      /** Description */
+      description: string;
+      /**
+       * Category
+       * @enum {string}
+       */
+      category:
+        "library" | "dining" | "student life" | "academic" | "recreation";
+      /** Latitude */
+      latitude: number;
+      /** Longitude */
+      longitude: number;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "active" | "archived";
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /** HTTPValidationError */
+    HTTPValidationError: {
+      /** Detail */
+      detail?: components["schemas"]["ValidationError"][];
+    };
+    /** RoomCreate */
+    RoomCreate: {
+      /** Name */
+      name: string;
+      /** Description */
+      description: string;
+      /**
+       * Category
+       * @enum {string}
+       */
+      category:
+        "library" | "dining" | "student life" | "academic" | "recreation";
+      /** Latitude */
+      latitude: number;
+      /** Longitude */
+      longitude: number;
+    };
     /** RoomResponse */
     RoomResponse: {
       /**
@@ -71,6 +181,37 @@ export interface components {
        * @default 0
        */
       participant_count: number;
+    };
+    /**
+     * RoomUpdate
+     * @description Partial edit: only the fields sent are changed. Status changes go through archive.
+     */
+    RoomUpdate: {
+      /** Name */
+      name?: string | null;
+      /** Description */
+      description?: string | null;
+      /** Category */
+      category?:
+        | ("library" | "dining" | "student life" | "academic" | "recreation")
+        | null;
+      /** Latitude */
+      latitude?: number | null;
+      /** Longitude */
+      longitude?: number | null;
+    };
+    /** ValidationError */
+    ValidationError: {
+      /** Location */
+      loc: (string | number)[];
+      /** Message */
+      msg: string;
+      /** Error Type */
+      type: string;
+      /** Input */
+      input?: unknown;
+      /** Context */
+      ctx?: Record<string, never>;
     };
   };
   responses: never;
@@ -119,6 +260,105 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["RoomResponse"][];
+        };
+      };
+    };
+  };
+  create_room_api_v1_admin_rooms_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RoomCreate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdminRoomResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  update_room_api_v1_admin_rooms__room_id__patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        room_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RoomUpdate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdminRoomResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  archive_room_api_v1_admin_rooms__room_id__archive_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        room_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdminRoomResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
