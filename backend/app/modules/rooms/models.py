@@ -4,11 +4,9 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import DateTime, Float, String, Text, Uuid
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
-
-class Base(DeclarativeBase):
-    pass
+from app.core.db import Base
 
 
 class Room(Base):
