@@ -41,6 +41,22 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: placechat_pbi07_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d placechat_pbi07_tests"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PBI07_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/placechat_pbi07_tests
     defaults:
       run:
         working-directory: backend

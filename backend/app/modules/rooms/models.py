@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, Float, String, Text, Uuid
+from sqlalchemy import DateTime, Float, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -23,3 +23,15 @@ class Room(Base):
     status: Mapped[str] = mapped_column(String, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class RoomMember(Base):
+    __tablename__ = "room_members"
+
+    room_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("rooms.id"), primary_key=True)
+    # The migration references auth.users; Supabase owns that external table.
+    session_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    nickname: Mapped[str] = mapped_column(Text)
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
