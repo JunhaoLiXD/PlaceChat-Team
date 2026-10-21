@@ -15,11 +15,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import admin_rooms
 from app.core.auth import Admin, require_admin
-from app.core.db import get_db
+from app.core.db import Base, get_db
 from app.core.errors import Forbidden, Unauthenticated
 from app.main import create_app
 from app.modules.rooms import admin_repository, admin_service
-from app.modules.rooms.models import Base, Room
+from app.modules.rooms.models import Room
 
 NEW_ROOM = {
     "name": "Newell Hall",
