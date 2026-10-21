@@ -10,8 +10,11 @@ import {
 } from "react";
 import Link from "next/link";
 
+import { shouldUseMocks } from "@/lib/config";
+import { mergeMessages } from "@/lib/messages";
 import { heartbeatRoom, joinRoom, sendRoomMessage } from "@/lib/placechat-api";
 import type { ChatMessage, RoomSummary } from "@/lib/placechat-types";
+import { type RoomChannelStatus, useRoomChannel } from "@/lib/use-room-channel";
 
 const MESSAGE_MAX_LENGTH = 500;
 const HEARTBEAT_INTERVAL_MS = 15_000;
@@ -39,6 +42,38 @@ const DEMO_MESSAGES: ChatMessage[] = [
     created_at: "2026-10-13T13:44:00-04:00",
   },
 ];
+
+// The full lost/restored banner and the refetch after reconnecting are PBI-17 (#21).
+const CONNECTION_BADGES: Record<
+  RoomChannelStatus | "demo",
+  { label: string; className: string; dotClassName: string }
+> = {
+  subscribed: {
+    label: "Connected",
+    className: "bg-emerald-50 text-emerald-700",
+    dotClassName: "bg-emerald-500",
+  },
+  connecting: {
+    label: "Connecting…",
+    className: "bg-slate-100 text-slate-600",
+    dotClassName: "bg-slate-400",
+  },
+  error: {
+    label: "Reconnecting…",
+    className: "bg-amber-50 text-amber-700",
+    dotClassName: "bg-amber-500",
+  },
+  closed: {
+    label: "Reconnecting…",
+    className: "bg-amber-50 text-amber-700",
+    dotClassName: "bg-amber-500",
+  },
+  demo: {
+    label: "Demo data",
+    className: "bg-slate-100 text-slate-600",
+    dotClassName: "bg-slate-400",
+  },
+};
 
 function formatMessageTime(value: string) {
   return new Intl.DateTimeFormat("en-US", {
@@ -180,10 +215,14 @@ export function MessageFeed({
 }
 
 export function ChatRoom({ room }: { room: RoomSummary }) {
+  const mockMode = shouldUseMocks();
   const [nickname, setNickname] = useState<string | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
+  // Real rooms start empty until the history endpoint (C3, Sprint 2) exists.
   const [messages, setMessages] = useState<ChatMessage[]>(() =>
-    DEMO_MESSAGES.map((message) => ({ ...message, room_id: room.id })),
+    mockMode
+      ? DEMO_MESSAGES.map((message) => ({ ...message, room_id: room.id }))
+      : [],
   );
   const [ownMessageIds, setOwnMessageIds] = useState<Set<string>>(
     () => new Set(),
@@ -204,12 +243,17 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     [room.participant_count],
   );
 
+  const channelStatus = useRoomChannel(mockMode ? null : room.id, (message) =>
+    setMessages((current) => mergeMessages(current, [message])),
+  );
+  const badge = CONNECTION_BADGES[mockMode ? "demo" : channelStatus];
+
   useEffect(() => {
     let cancelled = false;
 
     async function join() {
       try {
-        const result = await joinRoom(room);
+        const result = await joinRoom(room.id);
         if (!cancelled) {
           setNickname(result.nickname);
         }
@@ -268,7 +312,8 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
         nickname,
       );
       setOwnMessageIds((ids) => new Set(ids).add(sentMessage.id));
-      setMessages((current) => [...current, sentMessage]);
+      // The broadcast of this message may arrive first; merging keeps one copy.
+      setMessages((current) => mergeMessages(current, [sentMessage]));
       setDraft("");
     } catch (caught) {
       setSendError(
@@ -349,13 +394,13 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
             </div>
             <div
               role="status"
-              className="inline-flex shrink-0 items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700"
+              className={`inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ${badge.className}`}
             >
               <span
-                className="h-2 w-2 rounded-full bg-emerald-500"
+                className={`h-2 w-2 rounded-full ${badge.dotClassName}`}
                 aria-hidden="true"
               />
-              Connected
+              {badge.label}
             </div>
           </div>
 

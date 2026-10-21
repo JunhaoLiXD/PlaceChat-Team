@@ -130,4 +130,13 @@ describe("useRoomChannel", () => {
     await waitFor(() => expect(result.current).toBe("error"));
     expect(fake.client.channel).not.toHaveBeenCalled();
   });
+
+  test("stays disconnected when given no room (mock data mode)", async () => {
+    const { result } = renderHook(() => useRoomChannel(null, vi.fn()));
+
+    expect(result.current).toBe("closed");
+    await Promise.resolve();
+    expect(fake.ensureSession).not.toHaveBeenCalled();
+    expect(fake.client.channel).not.toHaveBeenCalled();
+  });
 });

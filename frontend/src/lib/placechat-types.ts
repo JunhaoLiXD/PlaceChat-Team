@@ -11,8 +11,8 @@ export interface RoomSummary {
   participant_count: number;
 }
 
+/** `POST /rooms/{id}/join`. The page already has the room from the list, so only the nickname is used. */
 export interface JoinRoomResult {
-  room: RoomSummary;
   nickname: string;
 }
 
