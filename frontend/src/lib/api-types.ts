@@ -41,6 +41,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/rooms/{room_id}/messages": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Send Message */
+    post: operations["send_message_api_v1_rooms__room_id__messages_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/admin/rooms": {
     parameters: {
       query?: never;
@@ -137,6 +154,39 @@ export interface components {
     HTTPValidationError: {
       /** Detail */
       detail?: components["schemas"]["ValidationError"][];
+    };
+    /**
+     * MessageCreate
+     * @description Length and blank checks run in the pipeline (step 3), not here, so the order holds.
+     */
+    MessageCreate: {
+      /** Body */
+      body: string;
+    };
+    /**
+     * MessageResponse
+     * @description The broadcast payload and the POST response. Never includes `session_id` (§4).
+     */
+    MessageResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Room Id
+       * Format: uuid
+       */
+      room_id: string;
+      /** Nickname */
+      nickname: string;
+      /** Body */
+      body: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
     };
     /** RoomCreate */
     RoomCreate: {
@@ -260,6 +310,41 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["RoomResponse"][];
+        };
+      };
+    };
+  };
+  send_message_api_v1_rooms__room_id__messages_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        room_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["MessageCreate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MessageResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
