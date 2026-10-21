@@ -28,16 +28,16 @@ Join owns one database transaction and first takes a stable, room-specific Postg
 
 `ensure_member(db, session_id, room_id)` checks the active room and a joined membership and returns the existing `Membership` contract without committing the caller's transaction. Presence (30 seconds), nickname reservation (60 seconds), and joined membership are separate: a stale heartbeat does not by itself revoke membership. Live participant counts and presence broadcasts remain separate work.
 
-`tests/test_membership.py` uses SQLite for fast HTTP and membership checks. `tests/test_membership_postgres.py` applies the actual room and membership migrations on isolated PostgreSQL and verifies UUID foreign keys, timestamp defaults, the composite primary key, RLS denial for `anon` and `authenticated`, concurrent nickname allocation, transaction lock release, and heartbeat racing a Leave. CI runs both suites with a disposable PostgreSQL 17 service.
+`tests/test_membership.py` uses SQLite for fast HTTP and membership checks. `tests/test_membership_postgres.py` applies the actual room and membership migrations on isolated PostgreSQL and verifies UUID foreign keys, timestamp defaults, the composite primary key, RLS denial for `anon` and `authenticated`, concurrent nickname allocation, transaction lock release, and heartbeat racing a Leave. Deleting an Auth user cascades to that user's memberships, including historical memberships; a PostgreSQL regression test verifies that other memberships, users, and rooms stay intact. CI runs both suites with a disposable PostgreSQL 17 service.
 
 To run the PostgreSQL checks locally, use a disposable **local** PostgreSQL server with an admin user allowed to create databases and roles. Create an empty `placechat_pbi07_tests` database there, then set the separate test URL in your shell:
 
 ```bash
-export PBI07_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/placechat_pbi07_tests
+export TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/placechat_pbi07_tests
 pytest
 ```
 
-PowerShell: `$env:PBI07_TEST_DATABASE_URL = 'postgresql://postgres:postgres@127.0.0.1:5432/placechat_pbi07_tests'`, then `.venv\Scripts\python.exe -m pytest`. Replace credentials and port with those of your disposable local server. The fixture accepts only loopback URLs naming a `placechat_pbi07_*` database, creates and drops its own UUID-named database, and never reads `DATABASE_URL` or changes the supplied database. Without this test URL, the PostgreSQL checks are reported as skipped. Its minimal `auth.users` table supplies only the UUID foreign key; it does not simulate Supabase Auth.
+PowerShell: `$env:TEST_DATABASE_URL = 'postgresql://postgres:postgres@127.0.0.1:5432/placechat_pbi07_tests'`, then `.venv\Scripts\python.exe -m pytest`. Replace credentials and port with those of your disposable local server. The fixture accepts only loopback URLs naming a `placechat_pbi07_*` database and rejects URL query parameters. It creates and drops its own UUID-named database, and never reads or falls back to `DATABASE_URL` or changes the supplied database. Without this test URL, the PostgreSQL checks are reported as skipped. Its minimal `auth.users` table supplies only the UUID foreign key; it does not simulate Supabase Auth.
 
 Before merging, validate on a personal Supabase project if available per [the Supabase README](../supabase/README.md). Remaining live checks are authenticated join/rejoin/heartbeat with real Supabase sessions, RLS through Supabase's browser API, and a staging smoke test after the merged migration deploys automatically. Never push unmerged migrations to shared staging. Leave endpoints, presence counts, and broadcasts belong to their own PBIs.
 

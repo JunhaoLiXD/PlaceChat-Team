@@ -56,7 +56,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      PBI07_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/placechat_pbi07_tests
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/placechat_pbi07_tests
     defaults:
       run:
         working-directory: backend

@@ -1,6 +1,6 @@
 """Real migrations, locks, and RLS on a disposable, loopback-only PostgreSQL database.
 
-Set PBI07_TEST_DATABASE_URL to a local placechat_pbi07_* database on a disposable server.
+Set TEST_DATABASE_URL to a local placechat_pbi07_* database on a disposable server.
 The fixture creates and drops its own database; it never reads the application's DATABASE_URL.
 Only auth.users' UUID key is stubbed: full Supabase Auth remains a live smoke check.
 """
@@ -32,9 +32,9 @@ MIGRATIONS = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
 
 @pytest.fixture(scope="module")
 def pg_engine() -> Iterator[Engine]:
-    value = os.environ.get("PBI07_TEST_DATABASE_URL")
+    value = os.environ.get("TEST_DATABASE_URL")
     if not value:
-        pytest.skip("Set PBI07_TEST_DATABASE_URL to run isolated PostgreSQL membership checks")
+        pytest.skip("Set TEST_DATABASE_URL to run isolated PostgreSQL membership checks")
     url = make_url(normalize_database_url(value))
     if (
         url.drivername != "postgresql+psycopg"
@@ -193,6 +193,77 @@ def test_migration_constraints_defaults_and_rls(pg_engine: Engine, pg_room: UUID
                 ),
                 {"room": room_id, "user": session_id},
             )
+
+
+def test_deleting_auth_user_cascades_only_their_memberships(
+    pg_engine: Engine, pg_room: UUID
+) -> None:
+    deleted_user = new_user(pg_engine)
+    surviving_user = new_user(pg_engine)
+    with pg_engine.begin() as connection:
+        other_room = connection.scalar(
+            text(
+                "INSERT INTO public.rooms (name, description, category, latitude, longitude) "
+                "VALUES (:name, 'Other room', 'library', 29.65, -82.34) RETURNING id"
+            ),
+            {"name": str(uuid4())},
+        )
+    for room_id in (pg_room, other_room):
+        join(pg_engine, room_id, deleted_user)
+        join(pg_engine, room_id, surviving_user)
+
+    with pg_engine.begin() as connection:
+        # Include historical membership in the cleanup, as well as active membership.
+        connection.execute(
+            update(RoomMember)
+            .where(RoomMember.room_id == other_room, RoomMember.session_id == deleted_user)
+            .values(left_at=NOW)
+        )
+        rooms_before = connection.execute(text("SELECT * FROM public.rooms ORDER BY id")).all()
+        users_before = connection.execute(
+            text("SELECT * FROM auth.users WHERE id <> :id ORDER BY id"), {"id": deleted_user}
+        ).all()
+        memberships_before = connection.execute(
+            text(
+                "SELECT * FROM public.room_members WHERE session_id <> :id "
+                "ORDER BY room_id, session_id"
+            ),
+            {"id": deleted_user},
+        ).all()
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM public.room_members WHERE session_id = :id"),
+                {"id": deleted_user},
+            )
+            == 2
+        )
+        assert (
+            connection.execute(
+                text("DELETE FROM auth.users WHERE id = :id"), {"id": deleted_user}
+            ).rowcount
+            == 1
+        )
+
+    with pg_engine.connect() as connection:
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM public.room_members WHERE session_id = :id"),
+                {"id": deleted_user},
+            )
+            == 0
+        )
+        assert (
+            connection.execute(text("SELECT * FROM public.rooms ORDER BY id")).all() == rooms_before
+        )
+        assert (
+            connection.execute(text("SELECT * FROM auth.users ORDER BY id")).all() == users_before
+        )
+        assert (
+            connection.execute(
+                text("SELECT * FROM public.room_members ORDER BY room_id, session_id")
+            ).all()
+            == memberships_before
+        )
 
 
 @pytest.mark.parametrize("age,reserved", [(30, True), (60, True), (60.000001, False)])

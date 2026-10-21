@@ -4,11 +4,9 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import DateTime, Float, ForeignKey, String, Text, Uuid
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
-
-class Base(DeclarativeBase):
-    pass
+from app.core.db import Base
 
 
 class Room(Base):
@@ -29,7 +27,7 @@ class RoomMember(Base):
     __tablename__ = "room_members"
 
     room_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("rooms.id"), primary_key=True)
-    # The migration references auth.users; Supabase owns that external table.
+    # The migration owns the cascading auth.users FK; Supabase owns that external table.
     session_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     nickname: Mapped[str] = mapped_column(Text)
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

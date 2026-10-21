@@ -1,6 +1,6 @@
 create table public.room_members (
     room_id uuid not null references public.rooms(id),
-    session_id uuid not null references auth.users(id),
+    session_id uuid not null references auth.users(id) on delete cascade,
     nickname text not null,
     joined_at timestamptz not null default now(),
     last_seen_at timestamptz not null default now(),

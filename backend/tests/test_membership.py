@@ -13,11 +13,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.auth import Session as Identity
 from app.core.auth import get_current_session
-from app.core.db import get_db
+from app.core.db import Base, get_db
 from app.core.errors import NotAMember, RoomNotFound
 from app.main import create_app
 from app.modules.rooms import repository, service
-from app.modules.rooms.models import Base, Room, RoomMember
+from app.modules.rooms.models import Room, RoomMember
 
 NOW = datetime(2026, 10, 15, 20, 0, tzinfo=UTC)
 SESSION_ID = uuid4()
