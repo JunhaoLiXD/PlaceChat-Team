@@ -3,19 +3,24 @@
 Owner: Zhijie — PBI-06 (#10), PBI-21 (#25).
 
 Student tokens are verified against the configured project's cached ES256 JWKS.
-Administrator authorization remains the PBI-21 stub.
+Administrators must also be non-anonymous and present in the database allow-list.
 """
 
 from dataclasses import dataclass
 from functools import lru_cache
 from math import isfinite
+from typing import Annotated
+from uuid import UUID
 
 import jwt
-from fastapi import Request
+from fastapi import Depends, Request
 from jwt import PyJWKClient
+from sqlalchemy.orm import Session as DbSession
 
+from app.core import auth_repository
 from app.core.config import get_settings
-from app.core.errors import Unauthenticated
+from app.core.db import get_db
+from app.core.errors import Forbidden, Unauthenticated
 
 
 @dataclass(frozen=True)
@@ -89,10 +94,21 @@ def get_current_session(request: Request) -> Session:
     return Session(id=claims["sub"], is_anonymous=claims["is_anonymous"])
 
 
-def require_admin() -> Admin:
+def require_admin(
+    current: Annotated[Session, Depends(get_current_session)],
+    db: Annotated[DbSession, Depends(get_db)],
+) -> Admin:
     """FastAPI dependency for /admin routes.
 
     Raises Unauthenticated (401) without a token, Forbidden (403) for anyone who is anonymous or
     not listed in admin_users.
     """
-    raise NotImplementedError("require_admin is implemented in PBI-21 (#25)")
+    if current.is_anonymous:
+        raise Forbidden()
+    try:
+        user_id = UUID(current.id)
+    except ValueError:
+        raise Forbidden() from None
+    if not auth_repository.is_admin_user(db, user_id):
+        raise Forbidden()
+    return Admin(user_id=current.id)

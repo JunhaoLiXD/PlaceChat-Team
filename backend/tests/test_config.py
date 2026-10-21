@@ -1,3 +1,4 @@
+from app.core.auth_models import AdminUser
 from app.core.config import Settings
 from app.core.db import Base, normalize_database_url
 from app.modules.rooms import models as room_models
@@ -28,3 +29,4 @@ def test_table_mappings_share_the_core_base() -> None:
     assert room_models.Base is Base  # old import path keeps working
     assert Base.metadata.tables["rooms"] is room_models.Room.__table__
     assert Base.metadata.tables["room_members"] is room_models.RoomMember.__table__
+    assert Base.metadata.tables["admin_users"] is AdminUser.__table__

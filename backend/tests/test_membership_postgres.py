@@ -5,82 +5,23 @@ The fixture creates and drops its own database; it never reads the application's
 Only auth.users' UUID key is stubbed: full Supabase Auth remains a live smoke check.
 """
 
-import os
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from threading import Event
 from time import monotonic, sleep
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Engine, create_engine, inspect, select, text, update
-from sqlalchemy.engine import make_url
+from sqlalchemy import Engine, inspect, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.db import normalize_database_url
 from app.core.errors import NotAMember
 from app.modules.rooms import repository, service
 from app.modules.rooms.models import Room, RoomMember
 from app.modules.rooms.schemas import JoinRoomResponse
 
 NOW = datetime(2026, 10, 21, 12, tzinfo=UTC)
-MIGRATIONS = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
-
-
-@pytest.fixture(scope="module")
-def pg_engine() -> Iterator[Engine]:
-    value = os.environ.get("TEST_DATABASE_URL")
-    if not value:
-        pytest.skip("Set TEST_DATABASE_URL to run isolated PostgreSQL membership checks")
-    url = make_url(normalize_database_url(value))
-    if (
-        url.drivername != "postgresql+psycopg"
-        or url.host not in {"127.0.0.1", "localhost", "::1"}
-        or not (url.database or "").startswith("placechat_pbi07_")
-        or url.query
-    ):
-        pytest.fail("Membership PostgreSQL tests require a loopback placechat_pbi07_* URL")
-
-    # Never reset the supplied database. Each test run owns a new database by UUID.
-    database = f"placechat_pbi07_{uuid4().hex}"
-    admin = create_engine(url, isolation_level="AUTOCOMMIT", hide_parameters=True)
-    engine = create_engine(url.set(database=database), hide_parameters=True)
-    with admin.connect() as connection:
-        connection.exec_driver_sql(f'CREATE DATABASE "{database}"')
-    try:
-        with engine.begin() as connection:
-            connection.exec_driver_sql("CREATE SCHEMA auth")
-            connection.exec_driver_sql("CREATE TABLE auth.users (id uuid PRIMARY KEY)")
-            for role in ("anon", "authenticated"):
-                exists = connection.scalar(
-                    text("SELECT EXISTS (SELECT FROM pg_roles WHERE rolname = :role)"),
-                    {"role": role},
-                )
-                if not exists:
-                    connection.exec_driver_sql(f"CREATE ROLE {role} NOLOGIN NOBYPASSRLS")
-                assert connection.scalar(
-                    text("SELECT NOT rolsuper AND NOT rolbypassrls FROM pg_roles WHERE rolname=:r"),
-                    {"r": role},
-                ), "Browser test roles must not bypass RLS"
-            for migration in (
-                "20261014180036_create_rooms.sql",
-                "20261015201410_create_room_members.sql",
-            ):
-                connection.exec_driver_sql((MIGRATIONS / migration).read_text(encoding="utf-8"))
-            # Exercise RLS itself, even when ordinary table privileges are granted.
-            connection.exec_driver_sql("GRANT USAGE ON SCHEMA public TO anon, authenticated")
-            connection.exec_driver_sql(
-                "GRANT SELECT, INSERT, UPDATE, DELETE ON public.room_members TO anon, authenticated"
-            )
-        yield engine
-    finally:
-        engine.dispose()
-        with admin.connect() as connection:
-            connection.exec_driver_sql(f'DROP DATABASE "{database}"')
-        admin.dispose()
 
 
 @pytest.fixture
