@@ -3,11 +3,13 @@ from collections.abc import Iterator
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import make_url
 
+from app.core import realtime
 from app.core.db import normalize_database_url
 from app.main import create_app
 
@@ -15,6 +17,19 @@ from app.main import create_app
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(create_app())
+
+
+@pytest.fixture(autouse=True)
+def no_real_broadcasts(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """A developer's backend/.env may hold staging keys; tests must never broadcast for real."""
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"test tried to call Realtime: {request.url}")
+
+    client = httpx.Client(transport=httpx.MockTransport(refuse))
+    monkeypatch.setattr(realtime, "get_http_client", lambda: client)
+    yield
+    client.close()
 
 
 @pytest.fixture(scope="module")
