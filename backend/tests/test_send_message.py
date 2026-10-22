@@ -22,7 +22,7 @@ from app.core.errors import Blocked, NotAMember, RateLimited, RoomNotFound
 from app.main import create_app
 from app.modules.messaging import service
 from app.modules.messaging.models import Message
-from app.modules.rooms.models import Room
+from app.modules.rooms.models import Room, RoomMember
 from app.modules.rooms.service import Membership
 
 SESSION_ID = str(uuid4())
@@ -242,3 +242,38 @@ def test_send_requires_a_token(room: Room) -> None:
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_send_uses_the_real_membership_check(
+    db: Session, room: Room, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Step 1 with PBI-07's real ensure_member: only a joined session sends, as its nickname."""
+    published: Published = []
+    monkeypatch.setattr(service, "publish", lambda *event: published.append(event))
+    now = datetime.now(UTC)
+    db.add(
+        RoomMember(
+            room_id=room.id,
+            session_id=UUID(SESSION_ID),
+            nickname="Breezy Capybara",
+            joined_at=now,
+            last_seen_at=now,
+        )
+    )
+    db.commit()
+    app = create_app()
+    app.dependency_overrides[get_db] = lambda: db
+    caller = {"session": AuthSession(SESSION_ID, True)}
+    app.dependency_overrides[get_current_session] = lambda: caller["session"]
+
+    with TestClient(app) as client:
+        joined = send(client, room.id, "hello")
+        caller["session"] = AuthSession(str(uuid4()), True)
+        stranger = send(client, room.id, "hi")
+
+    assert joined.status_code == 201
+    assert joined.json()["nickname"] == "Breezy Capybara"
+    assert stranger.status_code == 403
+    assert stranger.json()["error"]["code"] == "NOT_A_MEMBER"
+    assert [m.body for m in stored(db)] == ["hello"]
+    assert len(published) == 1
