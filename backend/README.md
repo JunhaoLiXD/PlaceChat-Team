@@ -20,6 +20,16 @@ ruff format --check .            # ruff format . to fix
 pytest
 ```
 
+## Administrator authentication
+
+Every existing `/api/v1/admin/rooms` operation uses `require_admin()` on its router. The dependency verifies the Bearer token through `get_current_session()` (ES256 signature, expiry, audience, and issuer), then uses the request's `get_db` session to check `admin_users`. Missing, invalid, or expired tokens return `UNAUTHENTICATED` (401). Anonymous sessions, including any accidentally added to the allow-list, and unlisted users return `FORBIDDEN` (403). A listed non-anonymous session receives the existing `Admin(user_id)` contract. Each request checks the allow-list again, so removing an entry revokes access without waiting for its token to expire.
+
+Junhao provisions Supabase email/password users and their `admin_users` entries. The migration creates an empty allow-list with RLS enabled and no policies; browsers cannot read it or grant privileges. There is no public sign-up or automatic admin creation. The login page belongs to PBI-23. Deleting a provisioned Auth user removes that user's allow-list entry through its foreign key.
+
+`tests/test_auth.py` exercises real authorization on every existing admin operation using locally signed ES256 tokens and an isolated SQLite database, with only the JWKS and broadcast transports replaced. `tests/test_admin_auth_postgres.py` validates the actual migration, allow-list lookup, and RLS denial for `anon` and `authenticated` on disposable PostgreSQL. Full Supabase email/password sign-in and staging admin-operation smoke tests remain live checks after Junhao provisions an account and the merged migration deploys.
+
+The admin migration is newer than `20261021031518_create_messages.sql` from PR #44. Coordinate merge/deployment ordering with Junhao so any older pending migrations are applied first. Do not edit merged migrations or push migrations to staging from a development machine.
+
 ## Room membership
 
 `POST /api/v1/rooms/{room_id}/join` and `POST /api/v1/rooms/{room_id}/heartbeat` require a Bearer token verified by `get_current_session()`. The caller's session ID comes from that token, never the request body. Join returns `{room: {id, name, description}, nickname}`; heartbeat returns `{status: "ok"}`. Missing or archived rooms return `ROOM_NOT_FOUND` (404). Heartbeat without a joined membership returns `NOT_A_MEMBER` (403).
@@ -37,7 +47,7 @@ export TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/placechat
 pytest
 ```
 
-PowerShell: `$env:TEST_DATABASE_URL = 'postgresql://postgres:postgres@127.0.0.1:5432/placechat_pbi07_tests'`, then `.venv\Scripts\python.exe -m pytest`. Replace credentials and port with those of your disposable local server. The fixture accepts only loopback URLs naming a `placechat_pbi07_*` database and rejects URL query parameters. It creates and drops its own UUID-named database, and never reads or falls back to `DATABASE_URL` or changes the supplied database. Without this test URL, the PostgreSQL checks are reported as skipped. Its minimal `auth.users` table supplies only the UUID foreign key; it does not simulate Supabase Auth.
+PowerShell: `$env:TEST_DATABASE_URL = 'postgresql://postgres:postgres@127.0.0.1:5432/placechat_pbi07_tests'`, then `.venv\Scripts\python.exe -m pytest`. Replace credentials and port with those of your disposable local server. The shared fixture in `tests/conftest.py` applies the room, membership, and administrator migrations for each PostgreSQL test module. It accepts only loopback URLs naming a `placechat_pbi07_*` database and rejects URL query parameters. It creates and drops its own UUID-named database, and never reads or falls back to `DATABASE_URL` or changes the supplied database. Without this test URL, the PostgreSQL checks are reported as skipped. Its minimal `auth.users` table supplies only the UUID foreign key; it does not simulate Supabase Auth.
 
 Before merging, validate on a personal Supabase project if available per [the Supabase README](../supabase/README.md). Remaining live checks are authenticated join/rejoin/heartbeat with real Supabase sessions, RLS through Supabase's browser API, and a staging smoke test after the merged migration deploys automatically. Never push unmerged migrations to shared staging. Leave endpoints, presence counts, and broadcasts belong to their own PBIs.
 

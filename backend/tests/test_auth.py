@@ -3,21 +3,28 @@
 import io
 import json
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from time import time
 from typing import Annotated, Any
 from unittest.mock import Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import Depends
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.pool import StaticPool
 
 from app.core import auth
+from app.core.auth_models import AdminUser
 from app.core.config import Settings
-from app.core.db import get_db
+from app.core.db import Base, get_db
 from app.main import create_app
+from app.modules.rooms import admin_service
+from app.modules.rooms.models import Room
 
 SUPABASE_URL = "https://test-project.supabase.co"
 ISSUER = f"{SUPABASE_URL}/auth/v1"
@@ -214,6 +221,198 @@ def test_public_routes_stay_public(
     assert auth_client.get("/api/v1/rooms").json() == []
 
 
-def test_require_admin_remains_stub() -> None:
-    with pytest.raises(NotImplementedError, match="PBI-21"):
-        auth.require_admin()
+@pytest.fixture
+def admin_db() -> Iterator[DbSession]:
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    now = datetime.now(UTC)
+    with DbSession(engine) as db:
+        room_id = uuid4()
+        db.add(
+            Room(
+                id=room_id,
+                name="Original room",
+                description="Test room",
+                category="library",
+                latitude=29.65,
+                longitude=-82.34,
+                status="active",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+        db.info.update(room_id=room_id, get_db_calls=0)
+        yield db
+    engine.dispose()
+
+
+@pytest.fixture
+def admin_publish(monkeypatch: pytest.MonkeyPatch) -> Mock:
+    publisher = Mock()
+    monkeypatch.setattr(admin_service, "publish", publisher)
+    return publisher
+
+
+@pytest.fixture
+def admin_auth_client(
+    auth_client: TestClient, admin_db: DbSession, admin_publish: Mock
+) -> TestClient:
+    # Keep both auth dependencies real; only the database and broadcast transport are isolated.
+    def isolated_db() -> Iterator[DbSession]:
+        admin_db.info["get_db_calls"] += 1
+        yield admin_db
+
+    auth_client.app.dependency_overrides[get_db] = isolated_db
+
+    @auth_client.app.get("/_test/admin")
+    def admin(current: Annotated[auth.Admin, Depends(auth.require_admin)]) -> auth.Admin:
+        return current
+
+    return auth_client
+
+
+def list_test_admin(db: DbSession) -> None:
+    db.add(
+        AdminUser(user_id=UUID(USER_ID), display_name="Test admin", created_at=datetime.now(UTC))
+    )
+    db.commit()
+
+
+ADMIN_ROOM = {
+    "name": "New test room",
+    "description": "Admin authorization test",
+    "category": "library",
+    "latitude": 29.65,
+    "longitude": -82.34,
+}
+ADMIN_OPERATIONS = [
+    ("POST", "/api/v1/admin/rooms", ADMIN_ROOM),
+    ("PATCH", "/api/v1/admin/rooms/{room_id}", {"name": "Unauthorized edit"}),
+    ("POST", "/api/v1/admin/rooms/{room_id}/archive", None),
+]
+
+
+@pytest.mark.parametrize("method,path,payload", ADMIN_OPERATIONS)
+@pytest.mark.parametrize(
+    "credential",
+    ["missing", "malformed", "expired", "signature", "audience", "issuer", "algorithm"],
+)
+def test_admin_routes_reject_invalid_tokens(
+    admin_auth_client: TestClient,
+    admin_db: DbSession,
+    private_key: ec.EllipticCurvePrivateKey,
+    admin_publish: Mock,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None,
+    credential: str,
+) -> None:
+    list_test_admin(admin_db)
+    token_claims = claims(is_anonymous=False)
+    signing_key = private_key
+    if credential == "expired":
+        token_claims["exp"] = int(time()) - 60
+    elif credential == "signature":
+        signing_key = ec.generate_private_key(ec.SECP256R1())
+    elif credential == "audience":
+        token_claims["aud"] = "anon"
+    elif credential == "issuer":
+        token_claims["iss"] = "https://other-project.supabase.co/auth/v1"
+    token = encode(signing_key, token_claims)
+    if credential == "algorithm":
+        token = jwt.encode(token_claims, "local-test-key-with-at-least-32-bytes", algorithm="HS256")
+    headers = (
+        {}
+        if credential == "missing"
+        else {"Authorization": f"Bearer {'invalid' if credential == 'malformed' else token}"}
+    )
+    response = admin_auth_client.request(
+        method, path.format(room_id=admin_db.info["room_id"]), json=payload, headers=headers
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+    assert admin_db.info["get_db_calls"] == 0
+    room = admin_db.get(Room, admin_db.info["room_id"])
+    assert (room.name, room.status) == ("Original room", "active")
+    admin_publish.assert_not_called()
+
+
+@pytest.mark.parametrize("method,path,payload", ADMIN_OPERATIONS)
+@pytest.mark.parametrize("anonymous,listed", [(True, False), (True, True), (False, False)])
+def test_admin_routes_reject_anonymous_and_unlisted_callers(
+    admin_auth_client: TestClient,
+    admin_db: DbSession,
+    private_key: ec.EllipticCurvePrivateKey,
+    admin_publish: Mock,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None,
+    anonymous: bool,
+    listed: bool,
+) -> None:
+    if listed:
+        list_test_admin(admin_db)
+    token = encode(private_key, claims(is_anonymous=anonymous, app_metadata={"role": "admin"}))
+    response = admin_auth_client.request(
+        method,
+        path.format(room_id=admin_db.info["room_id"]),
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"
+    room = admin_db.get(Room, admin_db.info["room_id"])
+    assert (room.name, room.status) == ("Original room", "active")
+    assert admin_db.scalar(select(func.count()).select_from(Room)) == 1
+    assert admin_db.scalar(select(func.count()).select_from(AdminUser)) == int(listed)
+    admin_publish.assert_not_called()
+
+
+def test_listed_non_anonymous_admin_can_manage_rooms(
+    admin_auth_client: TestClient, admin_db: DbSession, private_key: ec.EllipticCurvePrivateKey
+) -> None:
+    list_test_admin(admin_db)
+    token = encode(private_key, claims(is_anonymous=False))
+    headers = {"Authorization": f"Bearer {token}"}
+    current = admin_auth_client.get("/_test/admin", headers=headers)
+    assert current.status_code == 200
+    assert current.json() == {"user_id": USER_ID}
+    created = admin_auth_client.post("/api/v1/admin/rooms", json=ADMIN_ROOM, headers=headers)
+    assert created.status_code == 201
+    room_id = created.json()["id"]
+    updated = admin_auth_client.patch(
+        f"/api/v1/admin/rooms/{room_id}", json={"name": "Updated test room"}, headers=headers
+    )
+    assert updated.status_code == 200
+    assert updated.json()["name"] == "Updated test room"
+    archived = admin_auth_client.post(f"/api/v1/admin/rooms/{room_id}/archive", headers=headers)
+    assert archived.status_code == 200
+    assert archived.json()["status"] == "archived"
+    # Each request shares one get_db dependency between authorization and the operation.
+    assert admin_db.info["get_db_calls"] == 4
+
+
+def test_removing_allow_list_entry_revokes_the_same_token(
+    admin_auth_client: TestClient, admin_db: DbSession, private_key: ec.EllipticCurvePrivateKey
+) -> None:
+    list_test_admin(admin_db)
+    token = encode(private_key, claims(is_anonymous=False))
+    headers = {"Authorization": f"Bearer {token}"}
+    assert admin_auth_client.get("/_test/admin", headers=headers).status_code == 200
+    admin_db.delete(admin_db.get(AdminUser, UUID(USER_ID)))
+    admin_db.commit()
+    response = admin_auth_client.get("/_test/admin", headers=headers)
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_non_uuid_verified_subject_is_forbidden(
+    admin_auth_client: TestClient, private_key: ec.EllipticCurvePrivateKey
+) -> None:
+    token = encode(private_key, claims(sub="not-a-uuid", is_anonymous=False))
+    response = admin_auth_client.get("/_test/admin", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"
