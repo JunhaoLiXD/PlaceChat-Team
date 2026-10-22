@@ -33,3 +33,7 @@ class JoinRoomResponse(BaseModel):
 
 class HeartbeatResponse(BaseModel):
     status: Literal["ok"] = "ok"
+
+
+class LeaveResponse(BaseModel):
+    status: Literal["ok"] = "ok"

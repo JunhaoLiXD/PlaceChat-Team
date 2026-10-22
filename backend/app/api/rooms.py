@@ -8,7 +8,12 @@ from app.core.auth import Session as Identity
 from app.core.auth import get_current_session
 from app.core.db import get_db
 from app.modules.rooms import service
-from app.modules.rooms.schemas import HeartbeatResponse, JoinRoomResponse, RoomResponse
+from app.modules.rooms.schemas import (
+    HeartbeatResponse,
+    JoinRoomResponse,
+    LeaveResponse,
+    RoomResponse,
+)
 from app.modules.rooms.service import list_rooms
 
 router = APIRouter(tags=["rooms"])
@@ -36,3 +41,13 @@ def heartbeat_room(
 ) -> HeartbeatResponse:
     service.heartbeat_room(db, current.id, room_id)
     return HeartbeatResponse()
+
+
+@router.post("/rooms/{room_id}/leave", response_model=LeaveResponse)
+def leave_room(
+    room_id: UUID,
+    current: Annotated[Identity, Depends(get_current_session)],
+    db: Annotated[Session, Depends(get_db)],
+) -> LeaveResponse:
+    service.leave_room(db, current.id, room_id)
+    return LeaveResponse()

@@ -58,6 +58,16 @@ def join(engine: Engine, room_id: UUID, session_id: UUID) -> JoinRoomResponse:
         return service.join_room(db, str(session_id), room_id)
 
 
+def leave(engine: Engine, room_id: UUID, session_id: UUID) -> None:
+    with Session(engine) as db:
+        service.leave_room(db, str(session_id), room_id)
+
+
+def heartbeat(engine: Engine, room_id: UUID, session_id: UUID) -> None:
+    with Session(engine) as db:
+        service.heartbeat_room(db, str(session_id), room_id)
+
+
 def wait_for_lock(engine: Engine, event: str) -> None:
     deadline = monotonic() + 5
     with engine.connect() as connection:
@@ -318,34 +328,209 @@ def test_rollback_releases_lock_and_membership_write(
     assert join(pg_engine, pg_room, user_id).nickname
 
 
+@pytest.mark.parametrize("leave_first", [True, False])
 def test_concurrent_heartbeat_cannot_revive_a_left_membership(
-    pg_engine: Engine, pg_room: UUID
+    pg_engine: Engine, pg_room: UUID, monkeypatch: pytest.MonkeyPatch, leave_first: bool
+) -> None:
+    user_id = new_user(pg_engine)
+    monkeypatch.setattr(service, "utc_now", lambda: NOW - timedelta(seconds=15))
+    join(pg_engine, pg_room, user_id)
+    monkeypatch.setattr(service, "utc_now", lambda: NOW)
+    writing, release = Event(), Event()
+    operation = "leave" if leave_first else "heartbeat"
+    original = getattr(repository, operation)
+
+    def hold_write(*args, **kwargs):
+        result = original(*args, **kwargs)
+        writing.set()
+        assert release.wait(10), "Test did not release the first membership update"
+        return result
+
+    monkeypatch.setattr(repository, operation, hold_write)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(leave if leave_first else heartbeat, pg_engine, pg_room, user_id)
+        try:
+            assert writing.wait(5)
+            pending = executor.submit(
+                heartbeat if leave_first else leave, pg_engine, pg_room, user_id
+            )
+            wait_for_lock(pg_engine, "transactionid")
+            assert not pending.done()
+        finally:
+            release.set()
+        first.result(timeout=5)
+        if leave_first:
+            with pytest.raises(NotAMember):
+                pending.result(timeout=5)
+        else:
+            pending.result(timeout=5)
+    with Session(pg_engine) as db:
+        member = db.get(RoomMember, (pg_room, user_id))
+        assert member.left_at == NOW
+        assert member.last_seen_at == (NOW - timedelta(seconds=15) if leave_first else NOW)
+        assert (
+            next(room for room in service.list_rooms(db) if room.id == pg_room).participant_count
+            == 0
+        )
+
+
+@pytest.mark.parametrize("same_session", [False, True])
+@pytest.mark.parametrize("leave_first", [False, True])
+def test_leave_and_join_share_the_room_transaction_lock(
+    pg_engine: Engine,
+    pg_room: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+    same_session: bool,
+    leave_first: bool,
+) -> None:
+    user_id = new_user(pg_engine)
+    joiner = user_id if same_session else new_user(pg_engine)
+    current_time = [NOW]
+    monkeypatch.setattr(service, "utc_now", lambda: current_time[0])
+    monkeypatch.setattr(
+        service,
+        "generate_nickname",
+        lambda taken: next(name for name in ("Quiet Otter", "Calm Fox") if name not in taken),
+    )
+    assert join(pg_engine, pg_room, user_id).nickname == "Quiet Otter"
+    writing, release = Event(), Event()
+    operation = "leave" if leave_first else "upsert_member"
+    original = getattr(repository, operation)
+
+    def hold_write(*args, **kwargs):
+        result = original(*args, **kwargs)
+        writing.set()
+        assert release.wait(10), "Test did not release the first room transaction"
+        return result
+
+    monkeypatch.setattr(repository, operation, hold_write)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            leave if leave_first else join, pg_engine, pg_room, user_id if leave_first else joiner
+        )
+        try:
+            assert writing.wait(5)
+            pending = executor.submit(
+                join if leave_first else leave,
+                pg_engine,
+                pg_room,
+                joiner if leave_first else user_id,
+            )
+            wait_for_lock(pg_engine, "advisory")
+            assert not pending.done()
+            current_time[0] = NOW + timedelta(seconds=1)
+        finally:
+            release.set()
+        first.result(timeout=5)
+        result = pending.result(timeout=5)
+        if leave_first:
+            assert result.nickname == ("Calm Fox" if same_session else "Quiet Otter")
+    with Session(pg_engine) as db:
+        member = db.get(RoomMember, (pg_room, user_id))
+        if leave_first and same_session:
+            assert member.left_at is None
+            assert member.last_seen_at == current_time[0]
+        else:
+            assert member.left_at == (NOW if leave_first else current_time[0])
+        room = next(room for room in service.list_rooms(db) if room.id == pg_room)
+        assert room.participant_count == (0 if same_session and not leave_first else 1)
+
+
+@pytest.mark.parametrize(
+    "age,left,expected",
+    [
+        (0, False, 1),
+        (29.999999, False, 1),
+        (30, False, 1),
+        (30.000001, False, 0),
+        (60, False, 0),
+        (0, True, 0),
+    ],
+)
+def test_postgres_presence_boundary_and_leave(
+    pg_engine: Engine,
+    pg_room: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+    age: float,
+    left: bool,
+    expected: int,
+) -> None:
+    user_id = new_user(pg_engine)
+    monkeypatch.setattr(service, "utc_now", lambda: NOW)
+    with Session(pg_engine) as db:
+        member = repository.upsert_member(
+            db, pg_room, user_id, "Quiet Otter", NOW - timedelta(seconds=age)
+        )
+        if left:
+            member.left_at = NOW
+        db.commit()
+        room = next(room for room in service.list_rooms(db) if room.id == pg_room)
+        assert room.participant_count == expected
+    if not left:
+        leave(pg_engine, pg_room, user_id)
+    with Session(pg_engine) as db:
+        room = next(room for room in service.list_rooms(db) if room.id == pg_room)
+        assert room.participant_count == 0
+
+
+def test_postgres_leave_rollback_releases_lock(
+    pg_engine: Engine, pg_room: UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     user_id = new_user(pg_engine)
     join(pg_engine, pg_room, user_id)
-    left_at = datetime.now(UTC)
+    original = repository.leave
 
-    def heartbeat() -> None:
-        with Session(pg_engine) as db:
-            service.heartbeat_room(db, str(user_id), pg_room)
+    def fail_after_write(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("failure after leave write")
 
-    with Session(pg_engine) as leaving:
-        before = leaving.get(RoomMember, (pg_room, user_id)).last_seen_at
-        leaving.execute(
-            update(RoomMember).where(RoomMember.room_id == pg_room).values(left_at=left_at)
-        )
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            pending = executor.submit(heartbeat)
-            try:
-                wait_for_lock(pg_engine, "transactionid")
-            finally:
-                leaving.commit()
-            with pytest.raises(NotAMember):
-                pending.result(timeout=5)
+    monkeypatch.setattr(repository, "leave", fail_after_write)
     with Session(pg_engine) as db:
-        member = db.get(RoomMember, (pg_room, user_id))
-        assert member.left_at == left_at
-        assert member.last_seen_at == before
+        with pytest.raises(RuntimeError, match="after leave write"):
+            service.leave_room(db, str(user_id), pg_room)
+        assert not db.in_transaction()
+        assert db.get(RoomMember, (pg_room, user_id)).left_at is None
+    monkeypatch.setattr(repository, "leave", original)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(leave, pg_engine, pg_room, user_id).result(timeout=5)
+
+
+def test_postgres_leave_isolates_room_and_user(
+    pg_engine: Engine, pg_room: UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(service, "utc_now", lambda: NOW)
+    users = [new_user(pg_engine), new_user(pg_engine)]
+    with pg_engine.begin() as connection:
+        other_room = connection.scalar(
+            text(
+                "INSERT INTO public.rooms (name, description, category, latitude, longitude) "
+                "VALUES (:name, 'Other room', 'library', 29.65, -82.34) RETURNING id"
+            ),
+            {"name": str(uuid4())},
+        )
+    for room_id in (pg_room, other_room):
+        for user in users:
+            join(pg_engine, room_id, user)
+    query = select(RoomMember.__table__).where(RoomMember.room_id.in_([pg_room, other_room]))
+    with Session(pg_engine) as db:
+        before = {
+            (row["room_id"], row["session_id"]): dict(row) for row in db.execute(query).mappings()
+        }
+        assert all(
+            room.participant_count == 2
+            for room in service.list_rooms(db)
+            if room.id in (pg_room, other_room)
+        )
+    leave(pg_engine, pg_room, users[0])
+    before[(pg_room, users[0])]["left_at"] = NOW
+    with Session(pg_engine) as db:
+        after = {
+            (row["room_id"], row["session_id"]): dict(row) for row in db.execute(query).mappings()
+        }
+        assert after == before
+        counts = {room.id: room.participant_count for room in service.list_rooms(db)}
+        assert counts[pg_room] == 1
+        assert counts[other_room] == 2
 
 
 @pytest.mark.parametrize("role", ["anon", "authenticated"])
