@@ -27,3 +27,4 @@ def test_supabase_url_gets_psycopg_driver() -> None:
 def test_table_mappings_share_the_core_base() -> None:
     assert room_models.Base is Base  # old import path keeps working
     assert Base.metadata.tables["rooms"] is room_models.Room.__table__
+    assert Base.metadata.tables["room_members"] is room_models.RoomMember.__table__

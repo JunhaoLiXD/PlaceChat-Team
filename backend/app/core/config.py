@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_secret_key: SecretStr | None = None
     cors_origins: str = "http://localhost:3000"  # comma-separated
+    cors_origin_regex: str | None = None  # staging only: Vercel PR preview URLs
 
     # Product settings (PlaceChat Technical Design §11).
     message_max_length: int = 500
