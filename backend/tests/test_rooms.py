@@ -10,9 +10,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from app.core.db import get_db
+from app.core.db import Base, get_db
 from app.main import create_app
-from app.modules.rooms.models import Base, Room
+from app.modules.rooms.models import Room
 
 
 @pytest.fixture
