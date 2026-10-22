@@ -10,9 +10,13 @@ from collections.abc import Iterator
 from functools import lru_cache
 
 from sqlalchemy import Engine, create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import get_settings
+
+
+class Base(DeclarativeBase):
+    """Shared base for every table mapping, so all tables live in one `Base.metadata`."""
 
 
 def normalize_database_url(url: str) -> str:

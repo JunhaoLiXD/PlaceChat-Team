@@ -41,6 +41,57 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/rooms/{room_id}/join": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Join Room */
+    post: operations["join_room_api_v1_rooms__room_id__join_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/rooms/{room_id}/heartbeat": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Heartbeat Room */
+    post: operations["heartbeat_room_api_v1_rooms__room_id__heartbeat_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/rooms/{room_id}/messages": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Send Message */
+    post: operations["send_message_api_v1_rooms__room_id__messages_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/admin/rooms": {
     parameters: {
       query?: never;
@@ -137,6 +188,66 @@ export interface components {
     HTTPValidationError: {
       /** Detail */
       detail?: components["schemas"]["ValidationError"][];
+    };
+    /** HeartbeatResponse */
+    HeartbeatResponse: {
+      /**
+       * Status
+       * @default ok
+       * @constant
+       */
+      status: "ok";
+    };
+    /** JoinRoomResponse */
+    JoinRoomResponse: {
+      room: components["schemas"]["JoinedRoom"];
+      /** Nickname */
+      nickname: string;
+    };
+    /** JoinedRoom */
+    JoinedRoom: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Name */
+      name: string;
+      /** Description */
+      description: string;
+    };
+    /**
+     * MessageCreate
+     * @description Length and blank checks run in the pipeline (step 3), not here, so the order holds.
+     */
+    MessageCreate: {
+      /** Body */
+      body: string;
+    };
+    /**
+     * MessageResponse
+     * @description The broadcast payload and the POST response. Never includes `session_id` (§4).
+     */
+    MessageResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Room Id
+       * Format: uuid
+       */
+      room_id: string;
+      /** Nickname */
+      nickname: string;
+      /** Body */
+      body: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
     };
     /** RoomCreate */
     RoomCreate: {
@@ -260,6 +371,103 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["RoomResponse"][];
+        };
+      };
+    };
+  };
+  join_room_api_v1_rooms__room_id__join_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        room_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["JoinRoomResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  heartbeat_room_api_v1_rooms__room_id__heartbeat_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        room_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HeartbeatResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  send_message_api_v1_rooms__room_id__messages_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        room_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["MessageCreate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MessageResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
