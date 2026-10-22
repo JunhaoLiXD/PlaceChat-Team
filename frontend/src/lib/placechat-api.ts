@@ -83,7 +83,16 @@ export async function listRooms(): Promise<RoomSummary[]> {
 
 export async function joinRoom(roomId: string): Promise<JoinRoomResult> {
   if (shouldUseMocks()) {
-    return { nickname: "Quiet Otter" };
+    const room = MOCK_ROOMS.find((candidate) => candidate.id === roomId);
+    if (!room) {
+      throw new ApiRequestError(
+        "This room does not exist or has been closed.",
+        404,
+        "ROOM_NOT_FOUND",
+      );
+    }
+    const { id, name, description } = room;
+    return { room: { id, name, description }, nickname: "Quiet Otter" };
   }
 
   return apiFetch<JoinRoomResult>(`/api/v1/rooms/${roomId}/join`, {
