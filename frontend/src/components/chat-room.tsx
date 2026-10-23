@@ -3,6 +3,7 @@
 import {
   type FormEvent,
   type KeyboardEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -11,7 +12,9 @@ import {
 import Link from "next/link";
 
 import { heartbeatRoom, joinRoom, sendRoomMessage } from "@/lib/placechat-api";
+import { mergeMessages } from "@/lib/messages";
 import type { ChatMessage, RoomSummary } from "@/lib/placechat-types";
+import { useRoomChannel } from "@/lib/use-room-channel";
 
 const MESSAGE_MAX_LENGTH = 500;
 const HEARTBEAT_INTERVAL_MS = 15_000;
@@ -191,6 +194,10 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
   const [draft, setDraft] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const handleRoomMessage = useCallback((message: ChatMessage) => {
+    setMessages((current) => mergeMessages(current, [message]));
+  }, []);
+  const channelStatus = useRoomChannel(room.id, handleRoomMessage);
 
   const trimmedDraft = draft.trim();
   const messageLength = Array.from(trimmedDraft).length;
@@ -268,7 +275,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
         nickname,
       );
       setOwnMessageIds((ids) => new Set(ids).add(sentMessage.id));
-      setMessages((current) => [...current, sentMessage]);
+      setMessages((current) => mergeMessages(current, [sentMessage]));
       setDraft("");
     } catch (caught) {
       setSendError(
@@ -349,13 +356,29 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
             </div>
             <div
               role="status"
-              className="inline-flex shrink-0 items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700"
+              className={`inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ${
+                channelStatus === "subscribed"
+                  ? "bg-emerald-50 text-emerald-700"
+                  : channelStatus === "error" || channelStatus === "closed"
+                    ? "bg-rose-50 text-rose-700"
+                    : "bg-amber-50 text-amber-700"
+              }`}
             >
               <span
-                className="h-2 w-2 rounded-full bg-emerald-500"
+                className={`h-2 w-2 rounded-full ${
+                  channelStatus === "subscribed"
+                    ? "bg-emerald-500"
+                    : channelStatus === "error" || channelStatus === "closed"
+                      ? "bg-rose-500"
+                      : "bg-amber-500"
+                }`}
                 aria-hidden="true"
               />
-              Connected
+              {channelStatus === "subscribed"
+                ? "Connected"
+                : channelStatus === "error" || channelStatus === "closed"
+                  ? "Reconnecting"
+                  : "Connecting…"}
             </div>
           </div>
 
