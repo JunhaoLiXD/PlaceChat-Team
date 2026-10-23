@@ -61,9 +61,7 @@ def test_five_messages_are_allowed(db: Session, clock: datetime) -> None:
         add_message(db, session_id, str(uuid4()), clock - timedelta(seconds=offset))
 
 
-def test_sixth_message_is_blocked_with_rounded_retry_after(
-    db: Session, clock: datetime
-) -> None:
+def test_sixth_message_is_blocked_with_rounded_retry_after(db: Session, clock: datetime) -> None:
     session_id = str(uuid4())
     for offset in range(5):
         created_at = clock - timedelta(seconds=offset, milliseconds=200)

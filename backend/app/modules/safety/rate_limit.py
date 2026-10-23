@@ -42,9 +42,7 @@ def check_rate_limit(db: DbSession, session_id: str) -> None:
     retry_after = max(
         1,
         ceil(
-            (
-                oldest + timedelta(seconds=settings.rate_limit_window_seconds) - now
-            ).total_seconds()
+            (oldest + timedelta(seconds=settings.rate_limit_window_seconds) - now).total_seconds()
         ),
     )
     raise RateLimited(retry_after)
