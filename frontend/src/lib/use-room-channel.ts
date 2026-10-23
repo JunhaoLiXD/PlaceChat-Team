@@ -25,13 +25,15 @@ const STATUS_BY_STATE: Record<string, RoomChannelStatus> = {
  * browser can only receive. After an error, supabase-js rejoins on its own
  * with backoff (this also covers the `MissingPartition` error seen in spike
  * #30), and the status goes back to "subscribed" when it succeeds.
+ *
+ * Pass `null` to stay disconnected (mock data mode has no Supabase project).
  */
 export function useRoomChannel(
-  roomId: string,
+  roomId: string | null,
   onMessage: (message: ChatMessage) => void,
 ): RoomChannelStatus {
   const [state, setState] = useState<{
-    roomId: string;
+    roomId: string | null;
     status: RoomChannelStatus;
   }>({ roomId, status: "connecting" });
   const onMessageRef = useRef(onMessage);
@@ -41,6 +43,7 @@ export function useRoomChannel(
   });
 
   useEffect(() => {
+    if (roomId === null) return;
     let cancelled = false;
     let channel: RealtimeChannel | undefined;
     const report = (status: RoomChannelStatus) => {
@@ -79,6 +82,7 @@ export function useRoomChannel(
     };
   }, [roomId]);
 
+  if (roomId === null) return "closed";
   // A new room starts as "connecting" until its own channel reports back.
   return state.roomId === roomId ? state.status : "connecting";
 }

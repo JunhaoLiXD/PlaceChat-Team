@@ -6,18 +6,32 @@ import type {
   JoinRoomResult,
   RoomSummary,
 } from "@/lib/placechat-types";
+import { getAccessToken } from "@/lib/session";
 
 export class ApiRequestError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    public readonly code?: string,
   ) {
     super(message);
     this.name = "ApiRequestError";
   }
 }
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+interface ApiRequest extends RequestInit {
+  /** Send the current Supabase access token (Technical Design §6.3). */
+  auth?: boolean;
+}
+
+async function apiFetch<T>(
+  path: string,
+  { auth = false, ...init }: ApiRequest = {},
+): Promise<T> {
+  // Read the session before every call; supabase-js refreshes the token, so never cache it.
+  const authorization: Record<string, string> = auth
+    ? { Authorization: `Bearer ${await getAccessToken()}` }
+    : {};
   let response: Response;
 
   try {
@@ -25,8 +39,9 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
       headers: {
         Accept: "application/json",
-        ...(init?.body ? { "Content-Type": "application/json" } : {}),
-        ...init?.headers,
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...authorization,
+        ...init.headers,
       },
     });
   } catch {
@@ -47,6 +62,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiRequestError(
       body?.error?.message ?? "Something went wrong. Please try again.",
       response.status,
+      body?.error?.code,
     );
   }
 
@@ -54,8 +70,8 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function listRooms(): Promise<RoomSummary[]> {
-  // PBI-04 owns this endpoint. Local development can opt into deterministic rooms
-  // until it lands, but configured deployments must surface real API failures.
+  // Local development can opt into deterministic rooms, but configured
+  // deployments must surface real API failures.
   if (shouldUseMocks()) {
     return MOCK_ROOMS;
   }
@@ -65,26 +81,32 @@ export async function listRooms(): Promise<RoomSummary[]> {
   });
 }
 
-export async function joinRoom(
-  room: RoomSummary,
-  accessToken?: string,
-): Promise<JoinRoomResult> {
-  if (!accessToken) {
-    return { room, nickname: "Quiet Otter" };
+export async function joinRoom(roomId: string): Promise<JoinRoomResult> {
+  if (shouldUseMocks()) {
+    const room = MOCK_ROOMS.find((candidate) => candidate.id === roomId);
+    if (!room) {
+      throw new ApiRequestError(
+        "This room does not exist or has been closed.",
+        404,
+        "ROOM_NOT_FOUND",
+      );
+    }
+    const { id, name, description } = room;
+    return { room: { id, name, description }, nickname: "Quiet Otter" };
   }
 
-  return apiFetch<JoinRoomResult>(`/api/v1/rooms/${room.id}/join`, {
+  return apiFetch<JoinRoomResult>(`/api/v1/rooms/${roomId}/join`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}` },
+    auth: true,
   });
 }
 
-export async function heartbeatRoom(roomId: string, accessToken?: string) {
-  if (!accessToken) return;
+export async function heartbeatRoom(roomId: string): Promise<void> {
+  if (shouldUseMocks()) return;
 
   await apiFetch(`/api/v1/rooms/${roomId}/heartbeat`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}` },
+    auth: true,
   });
 }
 
@@ -92,9 +114,8 @@ export async function sendRoomMessage(
   roomId: string,
   body: string,
   nickname: string,
-  accessToken?: string,
 ): Promise<ChatMessage> {
-  if (!accessToken) {
+  if (shouldUseMocks()) {
     return {
       id: `demo-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       room_id: roomId,
@@ -107,6 +128,6 @@ export async function sendRoomMessage(
   return apiFetch<ChatMessage>(`/api/v1/rooms/${roomId}/messages`, {
     method: "POST",
     body: JSON.stringify({ body }),
-    headers: { Authorization: `Bearer ${accessToken}` },
+    auth: true,
   });
 }
