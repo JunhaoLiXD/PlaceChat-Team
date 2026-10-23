@@ -75,6 +75,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/rooms/{room_id}/leave": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Leave Room */
+    post: operations["leave_room_api_v1_rooms__room_id__leave_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/rooms/{room_id}/messages": {
     parameters: {
       query?: never;
@@ -215,6 +232,15 @@ export interface components {
       name: string;
       /** Description */
       description: string;
+    };
+    /** LeaveResponse */
+    LeaveResponse: {
+      /**
+       * Status
+       * @default ok
+       * @constant
+       */
+      status: "ok";
     };
     /**
      * MessageCreate
@@ -424,6 +450,37 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["HeartbeatResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  leave_room_api_v1_rooms__room_id__leave_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        room_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["LeaveResponse"];
         };
       };
       /** @description Validation Error */

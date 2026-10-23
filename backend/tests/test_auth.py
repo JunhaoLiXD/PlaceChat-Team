@@ -416,3 +416,61 @@ def test_non_uuid_verified_subject_is_forbidden(
     response = admin_auth_client.get("/_test/admin", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+@pytest.mark.parametrize(
+    "credential",
+    ["missing", "malformed", "expired", "signature", "audience", "issuer", "algorithm"],
+)
+def test_leave_rejects_invalid_tokens_before_database_access(
+    auth_client: TestClient,
+    private_key: ec.EllipticCurvePrivateKey,
+    credential: str,
+) -> None:
+    def forbidden_db():
+        raise AssertionError("Unauthorized leave accessed a database")
+
+    auth_client.app.dependency_overrides[get_db] = forbidden_db
+    payload = claims()
+    signing_key = private_key
+    if credential == "expired":
+        payload["exp"] = int(time()) - 60
+    elif credential == "signature":
+        signing_key = ec.generate_private_key(ec.SECP256R1())
+    elif credential == "audience":
+        payload["aud"] = "anon"
+    elif credential == "issuer":
+        payload["iss"] = "https://other-project.supabase.co/auth/v1"
+    token = encode(signing_key, payload)
+    if credential == "algorithm":
+        token = jwt.encode(payload, "local-test-key-with-at-least-32-bytes", algorithm="HS256")
+    headers = (
+        {}
+        if credential == "missing"
+        else {"Authorization": f"Bearer {'invalid' if credential == 'malformed' else token}"}
+    )
+    response = auth_client.post(f"/api/v1/rooms/{uuid4()}/leave", headers=headers)
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_leave_uses_verified_subject_instead_of_request_body(
+    auth_client: TestClient,
+    private_key: ec.EllipticCurvePrivateKey,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import rooms
+
+    db = object()
+    auth_client.app.dependency_overrides[get_db] = lambda: db
+    leave = Mock()
+    monkeypatch.setattr(rooms.service, "leave_room", leave)
+    room_id = uuid4()
+    response = auth_client.post(
+        f"/api/v1/rooms/{room_id}/leave",
+        headers={"Authorization": f"Bearer {encode(private_key, claims())}"},
+        json={"session_id": str(uuid4())},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    leave.assert_called_once_with(db, USER_ID, room_id)
