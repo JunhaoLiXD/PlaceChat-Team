@@ -17,8 +17,12 @@ from app.modules.rooms.schemas import JoinedRoom, JoinRoomResponse, RoomResponse
 
 
 def list_rooms(db: DbSession) -> list[RoomResponse]:
-    """List active rooms; live participant counts remain separate presence work."""
-    return [RoomResponse.model_validate(room) for room in repository.list_active_rooms(db)]
+    """List active rooms with counts at one inclusive presence cutoff."""
+    since = utc_now() - timedelta(seconds=get_settings().presence_timeout_seconds)
+    return [
+        RoomResponse.model_validate(room).model_copy(update={"participant_count": count})
+        for room, count in repository.list_active_rooms(db, since)
+    ]
 
 
 @dataclass(frozen=True)
@@ -42,7 +46,7 @@ def ensure_member(db: DbSession, session_id: str, room_id: str) -> Membership:
     if member is None or member.left_at is not None:
         raise NotAMember()
     # Membership is not presence: neither the 30s presence nor 60s hold cutoff
-    # revokes a joined membership. Explicit Leave is a separate operation.
+    # revokes a joined membership. Only explicit Leave ends it.
     return Membership(
         room_id=str(member.room_id),
         session_id=str(member.session_id),
@@ -82,9 +86,15 @@ def join_room(db: DbSession, session_id: str, room_id: UUID) -> JoinRoomResponse
         since = now - timedelta(seconds=get_settings().nickname_hold_seconds)
         reserved = repository.reserved_members(db, room_id, since)
         own = next((member for member in reserved if member.session_id == session_uuid), None)
-        nickname = (
-            own.nickname if own else generate_nickname({member.nickname for member in reserved})
-        )
+        if own:
+            nickname = own.nickname
+        else:
+            taken = {member.nickname for member in reserved}
+            previous = repository.get_member(db, room_id, session_uuid)
+            if previous is not None and previous.left_at is not None:
+                # A fresh name for this caller; the old name is still free for others.
+                taken.add(previous.nickname)
+            nickname = generate_nickname(taken)
         repository.upsert_member(db, room_id, session_uuid, nickname, now)
         response = JoinRoomResponse(room=JoinedRoom.model_validate(room), nickname=nickname)
     return response
@@ -95,4 +105,13 @@ def heartbeat_room(db: DbSession, session_id: str, room_id: UUID) -> None:
         if repository.get_active_room(db, room_id) is None:
             raise RoomNotFound()
         if not repository.heartbeat(db, room_id, _session_uuid(session_id), utc_now()):
+            raise NotAMember()
+
+
+def leave_room(db: DbSession, session_id: str, room_id: UUID) -> None:
+    with db.begin():
+        repository.lock_room(db, room_id)
+        if repository.get_active_room(db, room_id, lock=True) is None:
+            raise RoomNotFound()
+        if not repository.leave(db, room_id, _session_uuid(session_id), utc_now()):
             raise NotAMember()

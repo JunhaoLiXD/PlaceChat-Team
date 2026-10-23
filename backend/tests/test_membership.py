@@ -155,7 +155,7 @@ def test_expired_or_left_rejoin_calls_generator(
     response = client.post(f"/api/v1/rooms/{room_id}/join")
     assert response.status_code == 200
     assert response.json()["nickname"] == "Calm Fox"
-    generator.assert_called_once_with(set())
+    generator.assert_called_once_with({"Quiet Otter"} if left else set())
     member = db.get(RoomMember, (room_id, SESSION_ID))
     assert member.left_at is None
     assert member.joined_at.replace(tzinfo=UTC) == NOW
@@ -233,7 +233,7 @@ def test_join_rolls_back_after_write_failure(
     assert db.scalar(select(func.count()).select_from(RoomMember)) == 0
 
 
-@pytest.mark.parametrize("endpoint", ["join", "heartbeat"])
+@pytest.mark.parametrize("endpoint", ["join", "heartbeat", "leave"])
 @pytest.mark.parametrize("state", ["missing", "archived"])
 def test_inactive_room_returns_404(
     client: TestClient, db: Session, endpoint: str, state: str
@@ -244,7 +244,7 @@ def test_inactive_room_returns_404(
     assert response.json()["error"]["code"] == "ROOM_NOT_FOUND"
 
 
-@pytest.mark.parametrize("endpoint", ["join", "heartbeat"])
+@pytest.mark.parametrize("endpoint", ["join", "heartbeat", "leave"])
 @pytest.mark.parametrize("header", [None, "Basic invalid", "Bearer invalid"])
 def test_membership_routes_require_auth(
     client: TestClient,
@@ -326,3 +326,131 @@ def test_ensure_member_checks_active_room_first(db: Session, state: str) -> None
     target = uuid4() if state == "missing" else add_room(db, "archived")
     with pytest.raises(RoomNotFound):
         service.ensure_member(db, str(SESSION_ID), str(target))
+
+
+def counts(client: TestClient, db: Session) -> dict[str, int]:
+    response = client.get("/api/v1/rooms")
+    assert response.status_code == 200
+    # HTTP requests normally get separate sessions; this fixture shares one.
+    db.rollback()
+    return {room["id"]: room["participant_count"] for room in response.json()}
+
+
+def test_leave_changes_only_the_token_callers_room(
+    client: TestClient, db: Session, room_id: UUID
+) -> None:
+    other_user = uuid4()
+    other_room = add_room(db)
+    for target in (room_id, other_room):
+        add_member(db, target, age=15)
+        add_member(db, target, session_id=other_user, nickname="Calm Fox")
+    before = counts(client, db)
+    db.info["statements"].clear()
+    response = client.post(
+        f"/api/v1/rooms/{room_id}/leave",
+        json={"session_id": str(other_user), "room_id": str(other_room)},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert not db.in_transaction()
+    assert "pg_advisory_xact_lock" in db.info["statements"][0]
+    assert db.info["locks"][-1] == repository.room_lock_key(room_id)
+    for target in (room_id, other_room):
+        for user in (SESSION_ID, other_user):
+            member = db.get(RoomMember, (target, user))
+            assert member.nickname == ("Quiet Otter" if user == SESSION_ID else "Calm Fox")
+            assert member.joined_at.replace(tzinfo=UTC) == NOW - timedelta(minutes=5)
+            assert member.last_seen_at.replace(tzinfo=UTC) == NOW - timedelta(
+                seconds=15 if user == SESSION_ID else 0
+            )
+            if (target, user) == (room_id, SESSION_ID):
+                assert member.left_at.replace(tzinfo=UTC) == NOW
+            else:
+                assert member.left_at is None
+    after = counts(client, db)
+    assert (before[str(room_id)], after[str(room_id)]) == (2, 1)
+    assert before[str(other_room)] == after[str(other_room)] == 2
+    with pytest.raises(NotAMember):
+        service.ensure_member(db, str(SESSION_ID), str(room_id))
+    db.rollback()
+    response = client.post(f"/api/v1/rooms/{room_id}/heartbeat")
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "NOT_A_MEMBER"
+
+
+@pytest.mark.parametrize("left", [False, True])
+def test_leave_rejects_missing_or_already_left_membership(
+    client: TestClient, db: Session, room_id: UUID, left: bool
+) -> None:
+    if left:
+        add_member(db, room_id, left=True, age=15)
+    response = client.post(f"/api/v1/rooms/{room_id}/leave")
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "NOT_A_MEMBER"
+    assert not db.in_transaction()
+    member = db.get(RoomMember, (room_id, SESSION_ID))
+    if left:
+        assert member.left_at.replace(tzinfo=UTC) == NOW - timedelta(seconds=1)
+        assert member.last_seen_at.replace(tzinfo=UTC) == NOW - timedelta(seconds=15)
+    else:
+        assert member is None
+
+
+def test_stale_member_can_explicitly_leave(client: TestClient, db: Session, room_id: UUID) -> None:
+    add_member(db, room_id, age=120)
+    assert client.post(f"/api/v1/rooms/{room_id}/leave").status_code == 200
+    assert counts(client, db)[str(room_id)] == 0
+
+
+@pytest.mark.parametrize("other_claims_name", [False, True])
+def test_leave_frees_nickname_and_rejoin_allocates_fresh_name(
+    client: TestClient,
+    db: Session,
+    room_id: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+    other_claims_name: bool,
+) -> None:
+    generator = Mock(
+        side_effect=lambda taken: next(
+            name for name in ("Quiet Otter", "Calm Fox") if name not in taken
+        )
+    )
+    monkeypatch.setattr(service, "generate_nickname", generator)
+    path = f"/api/v1/rooms/{room_id}"
+    assert client.post(f"{path}/join").json()["nickname"] == "Quiet Otter"
+    assert counts(client, db)[str(room_id)] == 1
+    assert client.post(f"{path}/leave").status_code == 200
+    assert counts(client, db)[str(room_id)] == 0
+    if other_claims_name:
+        other_user = uuid4()
+        client.app.dependency_overrides[get_current_session] = lambda: Identity(
+            str(other_user), True
+        )
+        assert client.post(f"{path}/join").json()["nickname"] == "Quiet Otter"
+        generator.assert_called_with(set())
+    client.app.dependency_overrides[get_current_session] = lambda: Identity(str(SESSION_ID), True)
+    assert client.post(f"{path}/join").json()["nickname"] == "Calm Fox"
+    generator.assert_called_with({"Quiet Otter"})
+    assert counts(client, db)[str(room_id)] == (2 if other_claims_name else 1)
+    member = db.get(RoomMember, (room_id, SESSION_ID))
+    assert member.left_at is None
+    assert member.joined_at.replace(tzinfo=UTC) == NOW
+    assert member.last_seen_at.replace(tzinfo=UTC) == NOW
+
+
+def test_leave_rolls_back_after_write_failure(
+    client: TestClient, db: Session, room_id: UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_member(db, room_id)
+    original = repository.leave
+
+    def fail_after_write(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("test failure after leave write")
+
+    monkeypatch.setattr(repository, "leave", fail_after_write)
+    with pytest.raises(RuntimeError, match="after leave write"):
+        client.post(f"/api/v1/rooms/{room_id}/leave")
+    assert not db.in_transaction()
+    assert db.get(RoomMember, (room_id, SESSION_ID)).left_at is None
+    assert counts(client, db)[str(room_id)] == 1

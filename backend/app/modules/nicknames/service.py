@@ -104,6 +104,8 @@ def generate_nickname(taken: set[str]) -> str:
 
     base = choice(_COMBINATIONS)
     number = 1
-    while f"{base} {number}" in taken:
+    while True:
+        nickname = f"{base} {number}"
+        if nickname not in taken:
+            return nickname
         number += 1
-    return f"{base} {number}"
