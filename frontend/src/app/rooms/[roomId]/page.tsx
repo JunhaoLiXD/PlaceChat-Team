@@ -1,22 +1,6 @@
 import { Suspense } from "react";
-import { notFound } from "next/navigation";
 
-import { ChatRoom } from "@/components/chat-room";
-import { findMockRoom } from "@/lib/mock-data";
-
-function RoomLoading() {
-  return (
-    <main className="grid min-h-screen place-items-center px-5">
-      <div className="flex items-center gap-3 text-sm font-medium text-slate-500">
-        <span
-          className="h-5 w-5 animate-spin rounded-full border-2 border-violet-200 border-t-violet-600"
-          aria-hidden="true"
-        />
-        Joining room…
-      </div>
-    </main>
-  );
-}
+import { RoomScreen } from "@/components/room-screen";
 
 async function RoomContent({
   params,
@@ -24,13 +8,7 @@ async function RoomContent({
   params: Promise<{ roomId: string }>;
 }) {
   const { roomId } = await params;
-  const room = findMockRoom(roomId);
-
-  if (!room) {
-    notFound();
-  }
-
-  return <ChatRoom room={room} />;
+  return <RoomScreen roomId={roomId} />;
 }
 
 export default function RoomPage({
@@ -39,7 +17,7 @@ export default function RoomPage({
   params: Promise<{ roomId: string }>;
 }) {
   return (
-    <Suspense fallback={<RoomLoading />}>
+    <Suspense>
       <RoomContent params={params} />
     </Suspense>
   );

@@ -1,30 +1,19 @@
-export type RoomCategory =
-  "library" | "dining" | "student life" | "academic" | "recreation";
+// API shapes come from the generated `api-types.ts` (Technical Design §7.1), so the
+// backend's OpenAPI schema is the only source. Regenerate with `npm run api-types`.
+import type { components } from "@/lib/api-types";
 
-export interface RoomSummary {
-  id: string;
-  name: string;
-  description: string;
-  category: RoomCategory;
-  latitude: number;
-  longitude: number;
-  participant_count: number;
-}
+type Schemas = components["schemas"];
 
-export interface JoinRoomResult {
-  room: RoomSummary;
-  nickname: string;
-}
+export type RoomSummary = Schemas["RoomResponse"];
+export type RoomCategory = RoomSummary["category"];
 
-export interface ChatMessage {
-  id: string;
-  room_id: string;
-  nickname: string;
-  body: string;
-  created_at: string;
-  is_mine?: boolean;
-}
+/** `POST /rooms/{id}/join`. The page already has the room from the list; it uses the nickname. */
+export type JoinRoomResult = Schemas["JoinRoomResponse"];
 
+/** The POST response and the `message.created` broadcast. `is_mine` comes with history (C3). */
+export type ChatMessage = Schemas["MessageResponse"] & { is_mine?: boolean };
+
+/** The §7.2 error shape. Errors are not part of the OpenAPI schema. */
 export interface ApiErrorBody {
   error?: {
     code?: string;
