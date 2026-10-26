@@ -162,6 +162,24 @@ test("the status badge follows the realtime channel", async () => {
   expect(screen.getByRole("status").textContent).toBe("Reconnecting…");
 });
 
+test("tells the participant when the connection is lost and restored", async () => {
+  channel.status = "subscribed";
+  const { rerender } = render(<ChatRoom room={room} />);
+  expect(screen.queryByTestId("connection-banner")).toBeNull();
+
+  channel.status = "error";
+  rerender(<ChatRoom room={room} />);
+  expect(screen.getByTestId("connection-banner").textContent).toBe(
+    "Connection lost, reconnecting…",
+  );
+
+  channel.status = "subscribed";
+  rerender(<ChatRoom room={room} />);
+  expect(screen.getByTestId("connection-banner").textContent).toBe(
+    "Reconnected",
+  );
+});
+
 test("shows the API's message when sending is rejected", async () => {
   render(<ChatRoom room={room} />);
   await screen.findByText(/you are/i);
