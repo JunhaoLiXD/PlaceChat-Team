@@ -110,6 +110,16 @@ export async function heartbeatRoom(roomId: string): Promise<void> {
   });
 }
 
+/** Leave the room and free the nickname right away (B3). */
+export async function leaveRoom(roomId: string): Promise<void> {
+  if (shouldUseMocks()) return;
+
+  await apiFetch(`/api/v1/rooms/${roomId}/leave`, {
+    method: "POST",
+    auth: true,
+  });
+}
+
 export async function sendRoomMessage(
   roomId: string,
   body: string,
