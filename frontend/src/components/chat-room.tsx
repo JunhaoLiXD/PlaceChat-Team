@@ -21,6 +21,7 @@ import {
   sendRoomMessage,
 } from "@/lib/placechat-api";
 import type { ChatMessage, RoomSummary } from "@/lib/placechat-types";
+import { useConnectionBanner } from "@/lib/use-connection-banner";
 import { type RoomChannelStatus, useRoomChannel } from "@/lib/use-room-channel";
 
 const MESSAGE_MAX_LENGTH = 500;
@@ -50,7 +51,8 @@ const DEMO_MESSAGES: ChatMessage[] = [
   },
 ];
 
-// The full lost/restored banner and the refetch after reconnecting are PBI-17 (#21).
+// The badge shows the live status; the lost/restored banner below the header is PBI-17 (#21).
+// Refetching missed messages after a reconnect waits for the history endpoint (C3, Sprint 2).
 const CONNECTION_BADGES: Record<
   RoomChannelStatus | "demo",
   { label: string; className: string; dotClassName: string }
@@ -256,6 +258,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     setMessages((current) => mergeMessages(current, [message])),
   );
   const badge = CONNECTION_BADGES[mockMode ? "demo" : channelStatus];
+  const banner = useConnectionBanner(channelStatus);
 
   useEffect(() => {
     let cancelled = false;
@@ -289,7 +292,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
 
     const interval = window.setInterval(() => {
       void heartbeatRoom(room.id).catch(() => {
-        // PBI-17 owns the full reconnect flow. The reserved status area remains visible.
+        // A missed heartbeat is retried on the next tick; the banner reports Realtime drops.
       });
     }, HEARTBEAT_INTERVAL_MS);
 
@@ -430,6 +433,22 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
               {badge.label}
             </div>
           </div>
+
+          {banner ? (
+            <p
+              aria-live="polite"
+              data-testid="connection-banner"
+              className={`border-b px-4 py-2 text-center text-sm font-medium sm:px-6 ${
+                banner === "lost"
+                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-800"
+              }`}
+            >
+              {banner === "lost"
+                ? "Connection lost, reconnecting…"
+                : "Reconnected"}
+            </p>
+          ) : null}
 
           <MessageFeed messages={messages} ownMessageIds={ownMessageIds} />
 
