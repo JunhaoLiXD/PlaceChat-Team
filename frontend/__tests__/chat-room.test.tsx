@@ -5,7 +5,8 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { Activity } from "react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { ChatRoom, MessageFeed } from "@/components/chat-room";
 import { MOCK_ROOMS } from "@/lib/mock-data";
@@ -17,6 +18,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 const room = MOCK_ROOMS.find((candidate) => candidate.id === "library-west")!;
 
+beforeEach(() => router.push.mockReset());
 afterEach(cleanup);
 
 test("room page shows identity, safety reminder, and messages", async () => {
@@ -37,6 +39,27 @@ test("Leave returns to the room list in mock mode", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Leave" }));
 
   await waitFor(() => expect(router.push).toHaveBeenCalledWith("/"));
+});
+
+test("Leave works again after returning to a room the router kept alive", async () => {
+  // Next.js keeps a visited page in a hidden <Activity> and shows it again on return.
+  const page = (mode: "visible" | "hidden") => (
+    <Activity mode={mode}>
+      <ChatRoom room={room} />
+    </Activity>
+  );
+  const { rerender } = render(page("visible"));
+  await screen.findByText(/you are/i);
+  fireEvent.click(screen.getByRole("button", { name: "Leave" }));
+  await waitFor(() => expect(router.push).toHaveBeenCalledTimes(1));
+
+  rerender(page("hidden"));
+  rerender(page("visible"));
+
+  const leave = await screen.findByRole("button", { name: "Leave" });
+  expect(leave).toHaveProperty("disabled", false);
+  fireEvent.click(leave);
+  await waitFor(() => expect(router.push).toHaveBeenCalledTimes(2));
 });
 
 test("whitespace-only and over-limit messages cannot be sent", async () => {

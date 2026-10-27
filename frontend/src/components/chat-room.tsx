@@ -263,14 +263,18 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
   useEffect(() => {
     let cancelled = false;
 
+    // This also runs when Next shows a kept-alive page again (React <Activity>),
+    // so a Leave from the earlier visit must not keep the controls disabled.
     async function join() {
       try {
         const result = await joinRoom(room.id);
         if (!cancelled) {
           setNickname(result.nickname);
+          setIsLeaving(false);
         }
       } catch (caught) {
         if (!cancelled) {
+          setIsLeaving(false);
           setJoinError(
             caught instanceof Error
               ? caught.message
