@@ -1,0 +1,34 @@
+# Applies new SQL migrations to the staging database (PlaceChat Technical Design §9.5).
+# Runs on every push to main that changes supabase/migrations/, and can be started by hand
+# from the Actions tab. Production gets its own job at release (PBI-45).
+name: migrate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/migrations/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never run two pushes against the same database at once.
+concurrency:
+  group: migrate-staging
+  cancel-in-progress: false
+
+jobs:
+  staging:
+    runs-on: ubuntu-latest
+    # Connects straight to the database with the session pooler connection string (port 5432,
+    # IPv4, password percent-encoded). No Supabase platform token: `supabase link` would need
+    # read access to many project settings that a migration never uses.
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_STAGING_DB_URL }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: supabase/setup-cli@v3
+        with:
+          version: 2.118.0
+      - run: supabase db push --db-url "$SUPABASE_DB_URL" --yes

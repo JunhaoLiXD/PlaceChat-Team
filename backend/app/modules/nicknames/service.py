@@ -1,15 +1,111 @@
-"""Nickname contract (PlaceChat Technical Design §3.4).
+"""Nickname generation for temporary, room-local participant names."""
 
-Owner: Yufei — PBI-09 (#13), PBI-10 (#14).
-"""
+from itertools import product
+from secrets import choice
+
+ADJECTIVES = (
+    "Bright",
+    "Calm",
+    "Clever",
+    "Cozy",
+    "Daring",
+    "Eager",
+    "Gentle",
+    "Glad",
+    "Golden",
+    "Happy",
+    "Kind",
+    "Lively",
+    "Lucky",
+    "Mellow",
+    "Merry",
+    "Mighty",
+    "Neat",
+    "Nimble",
+    "Peaceful",
+    "Playful",
+    "Polite",
+    "Proud",
+    "Quiet",
+    "Rapid",
+    "Ready",
+    "Silly",
+    "Smooth",
+    "Snappy",
+    "Sunny",
+    "Swift",
+    "Tender",
+    "Thoughtful",
+    "Tiny",
+    "Upbeat",
+    "Warm",
+    "Witty",
+    "Wise",
+    "Zesty",
+    "Breezy",
+    "Cheery",
+)
+
+ANIMALS = (
+    "Badger",
+    "Beaver",
+    "Bison",
+    "Bluebird",
+    "Bunny",
+    "Capybara",
+    "Dolphin",
+    "Duck",
+    "Eagle",
+    "Falcon",
+    "Fawn",
+    "Fox",
+    "Gecko",
+    "Gopher",
+    "Hare",
+    "Hedgehog",
+    "Heron",
+    "Koala",
+    "Lemur",
+    "Lion",
+    "Llama",
+    "Otter",
+    "Panda",
+    "Parrot",
+    "Penguin",
+    "Puffin",
+    "Rabbit",
+    "Raccoon",
+    "Robin",
+    "Seal",
+    "Sparrow",
+    "Squirrel",
+    "Tern",
+    "Tiger",
+    "Turtle",
+    "Walrus",
+    "Whale",
+    "Wombat",
+    "Yak",
+    "Zebra",
+)
+
+_COMBINATIONS = tuple(f"{adjective} {animal}" for adjective, animal in product(ADJECTIVES, ANIMALS))
 
 
 def generate_nickname(taken: set[str]) -> str:
-    """Return a nickname that is not in `taken` (the room's reserved nicknames).
+    """Return a random available adjective-and-animal nickname.
 
-    Stub until PBI-09 (#13): returns "Guest 1", "Guest 2", ... so join can be built now.
+    The base pool is 40 x 40. Numbered names are used only after every base
+    combination has been reserved.
     """
+    available = tuple(nickname for nickname in _COMBINATIONS if nickname not in taken)
+    if available:
+        return choice(available)
+
+    base = choice(_COMBINATIONS)
     number = 1
-    while f"Guest {number}" in taken:
+    while True:
+        nickname = f"{base} {number}"
+        if nickname not in taken:
+            return nickname
         number += 1
-    return f"Guest {number}"

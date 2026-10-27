@@ -7,3 +7,10 @@ export const publicConfig = {
   supabasePublishableKey:
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? "",
 } as const;
+
+export function shouldUseMocks() {
+  return (
+    process.env.NEXT_PUBLIC_USE_MOCKS === "true" ||
+    !process.env.NEXT_PUBLIC_API_BASE_URL
+  );
+}
