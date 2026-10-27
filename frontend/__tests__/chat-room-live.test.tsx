@@ -23,6 +23,10 @@ const channel = vi.hoisted(() => ({
   onMessage: (() => {}) as (message: ChatMessage) => void,
 }));
 
+const router = vi.hoisted(() => ({ push: vi.fn() }));
+
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
+
 vi.mock("@/lib/session", () => ({
   getAccessToken: vi.fn().mockResolvedValue("test-access-token"),
 }));
@@ -71,6 +75,7 @@ const fetchMock = vi.fn<typeof fetch>();
 
 beforeEach(() => {
   channel.status = "connecting";
+  router.push.mockReset();
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (input, init) => {
     const url = String(input);
@@ -202,4 +207,34 @@ test("shows the API's message when the room cannot be joined", async () => {
   render(<ChatRoom room={room} />);
 
   expect(await screen.findByText(/has been closed/i)).toBeDefined();
+});
+
+test.each([
+  ["the Leave button", () => screen.getByRole("button", { name: "Leave" })],
+  ["the back link", () => screen.getByRole("link", { name: /all rooms/i })],
+])(
+  "%s leaves the room with the token, then returns to the list",
+  async (_name, control) => {
+    render(<ChatRoom room={room} />);
+    await screen.findByText(/you are/i);
+
+    fireEvent.click(control());
+
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/"));
+    const leave = requestTo(`/api/v1/rooms/${room.id}/leave`);
+    expect(leave.method).toBe("POST");
+    expect(new Headers(leave.headers).get("Authorization")).toBe(
+      "Bearer test-access-token",
+    );
+  },
+);
+
+test("returns to the list even if leaving fails", async () => {
+  render(<ChatRoom room={room} />);
+  await screen.findByText(/you are/i);
+  fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+  fireEvent.click(screen.getByRole("button", { name: "Leave" }));
+
+  await waitFor(() => expect(router.push).toHaveBeenCalledWith("/"));
 });

@@ -3,16 +3,23 @@
 import {
   type FormEvent,
   type KeyboardEvent,
+  type MouseEvent,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { shouldUseMocks } from "@/lib/config";
 import { mergeMessages } from "@/lib/messages";
-import { heartbeatRoom, joinRoom, sendRoomMessage } from "@/lib/placechat-api";
+import {
+  heartbeatRoom,
+  joinRoom,
+  leaveRoom,
+  sendRoomMessage,
+} from "@/lib/placechat-api";
 import type { ChatMessage, RoomSummary } from "@/lib/placechat-types";
 import { type RoomChannelStatus, useRoomChannel } from "@/lib/use-room-channel";
 
@@ -230,6 +237,8 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
   const [draft, setDraft] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [isLeaving, setIsLeaving] = useState(false);
+  const router = useRouter();
 
   const trimmedDraft = draft.trim();
   const messageLength = Array.from(trimmedDraft).length;
@@ -326,6 +335,23 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     }
   };
 
+  // Leave frees the nickname right away (§5.2). Unmounting the page then closes the
+  // channel and stops the heartbeat, so no more messages arrive from this room.
+  const handleLeave = async (event?: MouseEvent) => {
+    event?.preventDefault();
+    if (isLeaving) return;
+    setIsLeaving(true);
+
+    if (nickname) {
+      try {
+        await leaveRoom(room.id);
+      } catch {
+        // Still go back: presence times out after 30 seconds without heartbeats.
+      }
+    }
+    router.push("/");
+  };
+
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -339,6 +365,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
         <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between gap-4 px-4 sm:px-6">
           <Link
             href="/"
+            onClick={(event) => void handleLeave(event)}
             className="inline-flex min-h-10 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600"
           >
             <svg
@@ -368,11 +395,11 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
 
           <button
             type="button"
-            disabled
-            title="Leaving a room will be enabled in PBI-24"
-            className="min-h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-400"
+            onClick={() => void handleLeave()}
+            disabled={isLeaving}
+            className="min-h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 hover:text-slate-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600 disabled:cursor-not-allowed disabled:text-slate-400"
           >
-            Leave
+            {isLeaving ? "Leaving…" : "Leave"}
           </button>
         </div>
       </header>

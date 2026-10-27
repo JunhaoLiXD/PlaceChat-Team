@@ -3,6 +3,8 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { RoomScreen } from "@/components/room-screen";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 afterEach(() => {
   cleanup();
   vi.unstubAllEnvs();

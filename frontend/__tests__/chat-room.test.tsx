@@ -5,11 +5,15 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 
 import { ChatRoom, MessageFeed } from "@/components/chat-room";
 import { MOCK_ROOMS } from "@/lib/mock-data";
 import type { ChatMessage } from "@/lib/placechat-types";
+
+const router = vi.hoisted(() => ({ push: vi.fn() }));
+
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 const room = MOCK_ROOMS.find((candidate) => candidate.id === "library-west")!;
 
@@ -24,6 +28,15 @@ test("room page shows identity, safety reminder, and messages", async () => {
   );
   expect(screen.getByText(/keep it kind/i)).toBeDefined();
   expect(screen.getAllByText("Bright Heron").length).toBeGreaterThan(0);
+});
+
+test("Leave returns to the room list in mock mode", async () => {
+  render(<ChatRoom room={room} />);
+  await screen.findByText(/you are/i);
+
+  fireEvent.click(screen.getByRole("button", { name: "Leave" }));
+
+  await waitFor(() => expect(router.push).toHaveBeenCalledWith("/"));
 });
 
 test("whitespace-only and over-limit messages cannot be sent", async () => {
