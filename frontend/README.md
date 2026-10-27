@@ -24,7 +24,11 @@ npm run format:check         # npm run format to fix
 
 Client code can call `ensureSession()` from `src/lib/session.ts` to reuse the stored Supabase session or create an anonymous identity without requesting personal information. Calls in the same tab share in-flight work; browsers supporting Web Locks also serialize first sign-ins across tabs. The shared browser client persists sessions and automatically refreshes tokens.
 
-Call `getAccessToken()` immediately before each authenticated API request rather than keeping an access token in component state. Public room-list requests do not need a token. These helpers require the frontend Supabase URL and publishable key from `.env.local`; never use a backend secret key. Connecting the existing demo join/message flows to authenticated endpoints remains separate work.
+Call `getAccessToken()` immediately before each authenticated API request rather than keeping an access token in component state; `apiFetch(path, { auth: true })` in `src/lib/placechat-api.ts` does this for you. Public room-list requests do not need a token. These helpers require the frontend Supabase URL and publishable key from `.env.local`; never use a backend secret key.
+
+## Live messages
+
+`useRoomChannel(roomId, onMessage)` in `src/lib/use-room-channel.ts` joins the room's private Realtime channel and returns its status; `useConnectionBanner(status)` turns that status into the "Connection lost" / "Reconnected" banner. With `NEXT_PUBLIC_USE_MOCKS=true` the chat room uses sample data and does not connect.
 
 ## API types
 
