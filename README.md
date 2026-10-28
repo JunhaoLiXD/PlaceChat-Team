@@ -13,7 +13,7 @@ Sprint 1 (Oct 2 – Oct 27) is done, and the app is live at **https://placechat-
 - Send messages and see everyone's messages instantly; messages are shown as plain text, and sending too fast is limited to 5 messages in 10 seconds
 - See when the connection drops and comes back, and leave a room
 
-The admin API for creating, editing, and archiving rooms is ready; the admin pages (#27) are in progress. Sprint 2 adds message history, live participant counts, nearby rooms, reports, the word filter, and temporary blocks ([Technical Design §2.1](docs/technical-design.md#21-what-we-build)).
+The protected admin console at `/admin/login` lets provisioned administrators create, edit, and archive rooms. Sprint 2 adds message history, live participant counts, nearby rooms, reports, the word filter, and temporary blocks ([Technical Design §2.1](docs/technical-design.md#21-what-we-build)).
 
 ## Tech stack
 

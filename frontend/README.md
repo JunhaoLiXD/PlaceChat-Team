@@ -26,6 +26,10 @@ Client code can call `ensureSession()` from `src/lib/session.ts` to reuse the st
 
 Call `getAccessToken()` immediately before each authenticated API request rather than keeping an access token in component state; `apiFetch(path, { auth: true })` in `src/lib/placechat-api.ts` does this for you. Public room-list requests do not need a token. These helpers require the frontend Supabase URL and publishable key from `.env.local`; never use a backend secret key.
 
+## Administrator console
+
+Provisioned administrators sign in with email and password at `/admin/login`. The login form uses Supabase Auth, then verifies administrator access through the protected API before opening `/admin/rooms`. The room page lists active and archived rooms and supports creating, editing, and archiving active rooms. Browser-side checks are only user guidance; every admin API operation independently verifies the Bearer token and the database allow-list.
+
 ## Live messages
 
 `useRoomChannel(roomId, onMessage)` in `src/lib/use-room-channel.ts` joins the room's private Realtime channel and returns its status; `useConnectionBanner(status)` turns that status into the "Connection lost" / "Reconnected" banner. With `NEXT_PUBLIC_USE_MOCKS=true` the chat room uses sample data and does not connect.

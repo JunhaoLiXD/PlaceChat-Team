@@ -116,7 +116,8 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    get?: never;
+    /** List Rooms */
+    get: operations["list_rooms_api_v1_admin_rooms_get"];
     put?: never;
     /** Create Room */
     post: operations["create_room_api_v1_admin_rooms_post"];
@@ -525,6 +526,26 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_rooms_api_v1_admin_rooms_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdminRoomResponse"][];
         };
       };
     };
