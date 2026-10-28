@@ -1,6 +1,9 @@
 import { MOCK_ROOMS } from "@/lib/mock-data";
 import { publicConfig, shouldUseMocks } from "@/lib/config";
 import type {
+  AdminRoom,
+  AdminRoomCreate,
+  AdminRoomUpdate,
   ApiErrorBody,
   ChatMessage,
   JoinRoomResult,
@@ -78,6 +81,42 @@ export async function listRooms(): Promise<RoomSummary[]> {
 
   return apiFetch<RoomSummary[]>("/api/v1/rooms", {
     cache: "no-store",
+  });
+}
+
+/** Admin operations always use the real protected API, even in local mock mode. */
+export async function listAdminRooms(): Promise<AdminRoom[]> {
+  return apiFetch<AdminRoom[]>("/api/v1/admin/rooms", {
+    auth: true,
+    cache: "no-store",
+  });
+}
+
+export async function createAdminRoom(
+  room: AdminRoomCreate,
+): Promise<AdminRoom> {
+  return apiFetch<AdminRoom>("/api/v1/admin/rooms", {
+    method: "POST",
+    body: JSON.stringify(room),
+    auth: true,
+  });
+}
+
+export async function updateAdminRoom(
+  roomId: string,
+  changes: AdminRoomUpdate,
+): Promise<AdminRoom> {
+  return apiFetch<AdminRoom>(`/api/v1/admin/rooms/${roomId}`, {
+    method: "PATCH",
+    body: JSON.stringify(changes),
+    auth: true,
+  });
+}
+
+export async function archiveAdminRoom(roomId: string): Promise<AdminRoom> {
+  return apiFetch<AdminRoom>(`/api/v1/admin/rooms/${roomId}/archive`, {
+    method: "POST",
+    auth: true,
   });
 }
 

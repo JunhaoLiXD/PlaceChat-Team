@@ -21,6 +21,10 @@ from app.modules.rooms.models import Room
 ROOMS_TOPIC = "rooms"
 
 
+def list_rooms(db: DbSession) -> list[AdminRoomResponse]:
+    return [AdminRoomResponse.model_validate(room) for room in repository.list_rooms(db)]
+
+
 def create_room(db: DbSession, data: RoomCreate) -> AdminRoomResponse:
     _ensure_name_available(db, data.name)
     now = datetime.now(UTC)

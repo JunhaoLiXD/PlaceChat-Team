@@ -96,6 +96,22 @@ def assert_validation_failed(response: Any, text: str = "") -> None:
     assert text in response.json()["error"]["message"]
 
 
+# List
+
+
+def test_list_rooms_includes_active_and_archived(admin: TestClient, db: Session) -> None:
+    add_room(db, "Reitz Union", "archived")
+    add_room(db, "Library West", "active")
+
+    response = admin.get("/api/v1/admin/rooms")
+
+    assert response.status_code == 200
+    assert [(room["name"], room["status"]) for room in response.json()] == [
+        ("Library West", "active"),
+        ("Reitz Union", "archived"),
+    ]
+
+
 # Create
 
 
@@ -273,6 +289,7 @@ def test_missing_or_archived_room_not_found(
 
 
 ADMIN_REQUESTS = [
+    ("get", "/api/v1/admin/rooms", None),
     ("post", "/api/v1/admin/rooms", NEW_ROOM),
     ("patch", f"/api/v1/admin/rooms/{uuid4()}", {"name": "Anything"}),
     ("post", f"/api/v1/admin/rooms/{uuid4()}/archive", None),
@@ -287,7 +304,7 @@ def test_every_admin_route_requires_admin(app: FastAPI) -> None:
         "/api/v1/admin/rooms/{room_id}/archive",
     ]
     routes = [route for route in admin_rooms.router.routes if isinstance(route, APIRoute)]
-    assert len(routes) == 3
+    assert len(routes) == 4
     for route in routes:
         assert require_admin in [dependency.call for dependency in route.dependant.dependencies]
 
