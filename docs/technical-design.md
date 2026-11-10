@@ -1,6 +1,6 @@
 # PlaceChat Technical Design
 
-Final technical plan for Sprints 1 and 2 · CEN3031 Group 4 (10700) · Version 1.6 · November 10, 2026
+Final technical plan for Sprints 1 and 2 · CEN3031 Group 4 (10700) · Version 1.7 · November 10, 2026
 
 Prepared by Junhao Li (Product Manager) for Zhijie Yuan, Yufei Xiao, and Chuks Ofojuah.
 
@@ -404,7 +404,7 @@ PlaceChat-Team/
 | Local | `npm run dev` (port 3000) | `uvicorn app.main:app --reload` (port 8000) | Staging project, or your own free Supabase project when testing a new migration | Your branch |
 | Preview | Vercel preview per PR | Staging backend | Staging | Every PR |
 | Staging | Vercel, fixed staging domain | Render `placechat-api-staging` (free) | Supabase `placechat-staging` | `main`, on every merge |
-| Production | Vercel production | Render `placechat-api` (paid) | Supabase `placechat-prod` | `release`, at PBI-45–47 |
+| Production | Vercel production | Render `placechat-api` (free) | Supabase `placechat-prod` | `release`, at PBI-45–47 |
 
 ### 9.2 Hosting setup
 
@@ -417,8 +417,8 @@ PlaceChat-Team/
 ### 9.3 Free tiers and cost
 
 - Render free services sleep after 15 minutes without traffic and take about a minute to wake. Staging stays free, and we accept the sleep: open the site once and wait for it to wake before checkpoints and tests.
-- Production runs on Render's **cheapest paid instance**, which never sleeps, from PBI-45 until the course ends. This is our only expected cost. Without a budget, production would also run free, with a keep-warm ping on demo days only. We cannot ping both services all month, because the 750 free hours per workspace would run out.
-- Supabase free projects pause after about a week without activity, and the free plan allows two active projects, which is exactly staging plus production. Check that staging is active before demos.
+- Production also runs on Render's **free** instance, so the project has no costs. It sleeps like staging: before a demo, an acceptance test, or the release, open the production site and wait about a minute for the backend to wake. Both free services share 750 free hours per workspace each month; sleeping services use none, so we never keep either one awake with a scheduled ping.
+- Supabase free projects pause after about a week without activity, and the free plan allows two active projects, which is exactly staging plus production. Check that both are active before demos, and open each site at least once a week.
 
 ### 9.4 Environment variables
 
@@ -439,7 +439,7 @@ PlaceChat-Team/
 | api-types | Export FastAPI's OpenAPI schema → regenerate the frontend types → fail if they differ from the committed file |
 
 - Once all three jobs pass, they become **required status checks** in the ruleset, alongside the one required review.
-- `migrate.yml` runs `supabase db push` against staging on every push to `main` that changes `supabase/migrations/`. At release, Junhao runs it manually against production.
+- `migrate.yml` runs `supabase db push` against staging on every push to `main` that changes `supabase/migrations/`. Production is migrated only by hand: Actions → migrate → Run workflow with target `production`. That job uses the `production` environment's secret and applies the migrations on the `release` branch, so the database always matches the deployed code. Run it with `dry_run` first to list the pending migrations.
 
 ### 9.6 Testing
 
@@ -523,7 +523,7 @@ These platform and board tasks belong to PBI-01, PBI-02, and PBI-05:
 | Where | Task |
 |---|---|
 | Supabase | Create `placechat-staging` in East US (North Virginia). Enable anonymous sign-ins and raise their limit to 300 per hour. Confirm the JWT signing key is ES256. Create the publishable and secret keys. Turn off "Allow public access" in Realtime Settings. Create the admin accounts and their `admin_users` rows. |
-| Render | Create `placechat-api-staging` (free, Virginia, branch `main`, root `backend`, health check `/health`, Python 3.13). Create `placechat-api` (paid) at PBI-45. |
+| Render | Create `placechat-api-staging` (free, Virginia, branch `main`, root `backend`, health check `/health`, Python 3.13). Create `placechat-api` (free, Virginia, branch `release`, same settings) at PBI-45. |
 | Vercel | Import the repository with root directory `frontend`. Set the production branch to `release`, give `main` a fixed staging domain, and set the Preview and Production environment variables. |
 | GitHub | Add the Actions secrets ([Section 9.4](#94-environment-variables)). Extend `protect-main` to cover `release`. Make the three CI jobs required checks once they pass. |
 
@@ -542,3 +542,4 @@ These platform and board tasks belong to PBI-01, PBI-02, and PBI-05:
 | 1.4 | Oct 13, 2026 | The migration workflow connects with the session pooler connection string (`supabase db push --db-url`) instead of a Supabase access token and `supabase link`, which needs read access to many unrelated project settings. Its GitHub secrets are now one connection string per environment (Section 9.4). |
 | 1.5 | Nov 8, 2026 | Owners updated to match the delivered Sprint 1 work: `core/realtime`, `publish()`, and the send endpoint are Junhao's (Sections 3.3, 3.4, 7.1). New `GET /admin/rooms`, which lists archived rooms too (Section 7.1). Message history is members-only and returns `is_mine`; new `MESSAGE_NOT_FOUND` error for reports (Sections 7.1, 7.2). Staging-only `CORS_ORIGIN_REGEX` for PR previews (Sections 6.6, 9.4). New dates: Sprint 1 ended Oct 27, Sprint 2 runs Nov 9–22; PBI-37 moved to Junhao; Sprint 2 plan added (Section 10). |
 | 1.6 | Nov 10, 2026 | New `room_presence_counts` table, which stores the last broadcast count per room so unchanged counts are not sent again. Leave and heartbeat take the room lock like join (Sections 5.1, 5.2). Matches PR #85 (PBI-29). |
+| 1.7 | Nov 10, 2026 | Production runs on Render's free instance too, so the project has no costs; open the site about a minute early before demos (Sections 9.1, 9.3, 12). Production migrations run by hand from the `migrate` workflow with target `production`, from the `release` branch, with a dry run first (Section 9.5). |
