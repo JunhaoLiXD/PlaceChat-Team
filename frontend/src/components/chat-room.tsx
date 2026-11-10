@@ -17,6 +17,7 @@ import { mergeMessages } from "@/lib/messages";
 import {
   heartbeatRoom,
   joinRoom,
+  getRoomMessages,
   leaveRoom,
   sendRoomMessage,
 } from "@/lib/placechat-api";
@@ -272,6 +273,12 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
           setNickname(result.nickname);
           setIsLeaving(false);
         }
+        if (!mockMode) {
+          const history = await getRoomMessages(room.id);
+          if (!cancelled) {
+            setMessages((current) => mergeMessages(current, history));
+          }
+        }
       } catch (caught) {
         if (!cancelled) {
           setIsLeaving(false);
@@ -289,7 +296,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     return () => {
       cancelled = true;
     };
-  }, [room]);
+  }, [mockMode, room]);
 
   useEffect(() => {
     if (!nickname) return;

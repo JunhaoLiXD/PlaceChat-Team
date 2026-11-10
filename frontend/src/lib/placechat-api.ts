@@ -3,6 +3,7 @@ import { publicConfig, shouldUseMocks } from "@/lib/config";
 import type {
   ApiErrorBody,
   ChatMessage,
+  HistoryMessage,
   JoinRoomResult,
   RoomSummary,
 } from "@/lib/placechat-types";
@@ -140,4 +141,17 @@ export async function sendRoomMessage(
     body: JSON.stringify({ body }),
     auth: true,
   });
+}
+
+export async function getRoomMessages(
+  roomId: string,
+  after?: string,
+): Promise<HistoryMessage[]> {
+  if (shouldUseMocks()) return [];
+
+  const query = after ? `?after=${encodeURIComponent(after)}` : "";
+  return apiFetch<HistoryMessage[]>(
+    `/api/v1/rooms/${roomId}/messages${query}`,
+    { auth: true, cache: "no-store" },
+  );
 }
