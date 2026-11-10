@@ -1,6 +1,7 @@
-# Applies new SQL migrations to the staging database (PlaceChat Technical Design §9.5).
-# Runs on every push to main that changes supabase/migrations/, and can be started by hand
-# from the Actions tab. Production gets its own job at release (PBI-45).
+# Applies new SQL migrations (PlaceChat Technical Design §9.5).
+# - Staging: runs on every push to main that changes supabase/migrations/, or by hand.
+# - Production (PBI-45): only by hand from the Actions tab, with target "production". It applies
+#   the migrations on the `release` branch, so the database matches the deployed code.
 name: migrate
 
 on:
@@ -9,26 +10,55 @@ on:
     paths:
       - "supabase/migrations/**"
   workflow_dispatch:
+    inputs:
+      target:
+        description: "Database to migrate"
+        type: choice
+        options: [staging, production]
+        default: staging
+      dry_run:
+        description: "Only list the migrations that would be applied"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-# Never run two pushes against the same database at once.
+# Never run two migrations against the same database at once.
 concurrency:
-  group: migrate-staging
+  group: migrate-${{ inputs.target || 'staging' }}
   cancel-in-progress: false
 
 jobs:
   staging:
+    if: github.event_name == 'push' || inputs.target == 'staging'
     runs-on: ubuntu-latest
     # Connects straight to the database with the session pooler connection string (port 5432,
     # IPv4, password percent-encoded). No Supabase platform token: `supabase link` would need
     # read access to many project settings that a migration never uses.
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_STAGING_DB_URL }}
+      DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
     steps:
       - uses: actions/checkout@v7
-      - uses: supabase/setup-cli@v3
+      - uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3.2.0
         with:
           version: 2.118.0
-      - run: supabase db push --db-url "$SUPABASE_DB_URL" --yes
+      - run: supabase db push --db-url "$SUPABASE_DB_URL" --yes $DRY_RUN
+
+  production:
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'production'
+    runs-on: ubuntu-latest
+    # The secret lives in the `production` environment, which can require an approval first.
+    environment: production
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_PRODUCTION_DB_URL }}
+      DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: release
+      - uses: supabase/setup-cli@689adcfb80d947100a1eab127289b97d1fb07b13 # v3.2.0
+        with:
+          version: 2.118.0
+      - run: supabase db push --db-url "$SUPABASE_DB_URL" --yes $DRY_RUN
