@@ -1,6 +1,6 @@
 # PlaceChat Technical Design
 
-Final technical plan for Sprints 1 and 2 · CEN3031 Group 4 (10700) · Version 1.5 · November 8, 2026
+Final technical plan for Sprints 1 and 2 · CEN3031 Group 4 (10700) · Version 1.6 · November 10, 2026
 
 Prepared by Junhao Li (Product Manager) for Zhijie Yuan, Yufei Xiao, and Chuks Ofojuah.
 
@@ -193,6 +193,7 @@ All tables live in Supabase PostgreSQL in the `public` schema, and every table h
 | blocks | id, session_id, reason, created_by, created_at, expires_at | Active while expires_at is in the future (E3). |
 | blocked_words | id, word (unique, lowercase), created_at | Edited on the admin Words page (D3). |
 | admin_users | user_id (Supabase Auth user id), display_name, created_at | Allow-list of administrators (E1). |
+| room_presence_counts | room_id (primary key), participant_count | The last count broadcast for each room. Used only to skip unchanged count events; presence itself always comes from room_members (A2). |
 
 `session_id` is the Supabase anonymous user id. We store no names, emails, IP addresses, or locations for students (B1, A3).
 
@@ -200,10 +201,11 @@ All tables live in Supabase PostgreSQL in the `public` schema, and every table h
 
 - **Present in a room** means `left_at` is null and `last_seen_at` is within the last 30 seconds. Participant counts use this rule.
 - **Nickname reserved** means `left_at` is null and `last_seen_at` is within the last 60 seconds. If the same session rejoins in that window, it gets the same nickname back (B4). An explicit Leave sets `left_at`, which frees the nickname immediately.
-- **Joining** runs in one transaction that first takes `pg_advisory_xact_lock` on the room. Two people joining at the same moment can therefore never get the same nickname.
+- **Joining, leaving, and heartbeats** each run in one transaction that first takes `pg_advisory_xact_lock` on the room. Two people joining at the same moment can therefore never get the same nickname.
 - **Rate limit:** count the session's messages from the last 10 seconds. At 5 or more, reject the message and set `retry_after` to (oldest message time + 10 s − now).
 - **Visible history:** the room's messages where `removed_at` is null and `created_at` is within 7 days. Take the newest 20 and return them oldest first.
-- **Presence sweeper:** a background task in FastAPI runs every 10 seconds. It finds members who just went past the 30-second presence timeout, then broadcasts the new counts. The backend runs as a single instance, so one sweeper is enough.
+- **Count events:** join, leave, and heartbeat recompute the room's count inside their transaction and compare it with `room_presence_counts`. Only a changed count is stored there and broadcast, after the transaction commits.
+- **Presence sweeper:** a background task in FastAPI runs every 10 seconds. It recomputes each active room's count the same way, so members who just went past the 30-second presence timeout produce one count event. The backend runs as a single instance, so one sweeper is enough.
 
 ## 6. Identity and security
 
@@ -539,3 +541,4 @@ These platform and board tasks belong to PBI-01, PBI-02, and PBI-05:
 | 1.3 | Oct 11, 2026 | Moved into the repository as Markdown; this file is now the only maintained copy. Module contracts take `db` as their first argument when they touch the database. Section 10 lists the final assignments only. |
 | 1.4 | Oct 13, 2026 | The migration workflow connects with the session pooler connection string (`supabase db push --db-url`) instead of a Supabase access token and `supabase link`, which needs read access to many unrelated project settings. Its GitHub secrets are now one connection string per environment (Section 9.4). |
 | 1.5 | Nov 8, 2026 | Owners updated to match the delivered Sprint 1 work: `core/realtime`, `publish()`, and the send endpoint are Junhao's (Sections 3.3, 3.4, 7.1). New `GET /admin/rooms`, which lists archived rooms too (Section 7.1). Message history is members-only and returns `is_mine`; new `MESSAGE_NOT_FOUND` error for reports (Sections 7.1, 7.2). Staging-only `CORS_ORIGIN_REGEX` for PR previews (Sections 6.6, 9.4). New dates: Sprint 1 ended Oct 27, Sprint 2 runs Nov 9–22; PBI-37 moved to Junhao; Sprint 2 plan added (Section 10). |
+| 1.6 | Nov 10, 2026 | New `room_presence_counts` table, which stores the last broadcast count per room so unchanged counts are not sent again. Leave and heartbeat take the room lock like join (Sections 5.1, 5.2). Matches PR #85 (PBI-29). |
