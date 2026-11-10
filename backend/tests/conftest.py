@@ -12,11 +12,19 @@ from sqlalchemy.engine import make_url
 from app.core import realtime
 from app.core.db import normalize_database_url
 from app.main import create_app
+from app.modules.rooms import presence, sweeper
 
 
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(create_app())
+
+
+@pytest.fixture(autouse=True)
+def no_background_presence_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Request tests must never start a database sweep using a developer's .env."""
+    monkeypatch.setattr(sweeper, "sweep_presence", lambda: None)
+    monkeypatch.setattr(presence, "publish", lambda *args: None)
 
 
 @pytest.fixture(autouse=True)
@@ -75,12 +83,14 @@ def pg_engine() -> Iterator[Engine]:
                 "20261014180036_create_rooms.sql",
                 "20261015201410_create_room_members.sql",
                 "20261021192836_create_admin_users.sql",
+                "20261109120000_create_room_presence_counts.sql",
             ):
                 connection.exec_driver_sql((migrations / migration).read_text(encoding="utf-8"))
             # Exercise RLS itself, even when ordinary table privileges are granted.
             connection.exec_driver_sql("GRANT USAGE ON SCHEMA public TO anon, authenticated")
             connection.exec_driver_sql(
-                "GRANT SELECT, INSERT, UPDATE, DELETE ON public.room_members, public.admin_users "
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON public.room_members, public.admin_users, "
+                "public.room_presence_counts "
                 "TO anon, authenticated"
             )
         yield engine

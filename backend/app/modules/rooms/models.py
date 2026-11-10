@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, Text, Uuid
+from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -33,3 +33,15 @@ class RoomMember(Base):
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RoomPresenceCount(Base):
+    """Last observed count, for change detection only; timestamps still define presence."""
+
+    __tablename__ = "room_presence_counts"
+    __table_args__ = (CheckConstraint("participant_count >= 0"),)
+
+    room_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("rooms.id", ondelete="CASCADE"), primary_key=True
+    )
+    participant_count: Mapped[int] = mapped_column(Integer)
