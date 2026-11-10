@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { Activity } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -96,8 +97,31 @@ test("Enter sends trimmed plain text and marks it as the participant's own", asy
   expect(message.closest("article")?.dataset.ownMessage).toBe("true");
   expect(message.querySelector("img")).toBeNull();
   expect(message.querySelector("a")).toBeNull();
+  expect(
+    within(message.closest("article")!).queryByRole("button", {
+      name: "Report",
+    }),
+  ).toBeNull();
 
   await waitFor(() => expect(input).toHaveProperty("value", ""));
+});
+
+test("reports another participant's message with an optional reason", async () => {
+  render(<ChatRoom room={room} />);
+  await screen.findByText(/you are/i);
+
+  const message = screen.getByText("Has anyone found a quiet corner nearby?");
+  const bubble = within(message.closest("article")!);
+  fireEvent.click(bubble.getByRole("button", { name: "Report" }));
+  fireEvent.change(bubble.getByLabelText(/reason/i), {
+    target: { value: "harassment" },
+  });
+  fireEvent.click(bubble.getByRole("button", { name: "Submit report" }));
+
+  expect((await bubble.findByRole("status")).textContent).toBe(
+    "Report submitted",
+  );
+  expect(bubble.queryByRole("button", { name: "Report" })).toBeNull();
 });
 
 test("a reader who scrolled up gets a new-message button", async () => {
