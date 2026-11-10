@@ -1,6 +1,7 @@
 import { MOCK_ROOMS } from "@/lib/mock-data";
 import { publicConfig, shouldUseMocks } from "@/lib/config";
 import type {
+  AdminReport,
   AdminRoom,
   AdminRoomCreate,
   AdminRoomUpdate,
@@ -69,6 +70,7 @@ async function apiFetch<T>(
     );
   }
 
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -115,6 +117,27 @@ export async function updateAdminRoom(
 
 export async function archiveAdminRoom(roomId: string): Promise<AdminRoom> {
   return apiFetch<AdminRoom>(`/api/v1/admin/rooms/${roomId}/archive`, {
+    method: "POST",
+    auth: true,
+  });
+}
+
+export async function listAdminReports(): Promise<AdminReport[]> {
+  return apiFetch<AdminReport[]>("/api/v1/admin/reports?status=pending", {
+    auth: true,
+    cache: "no-store",
+  });
+}
+
+export async function removeReportedMessage(reportId: string): Promise<void> {
+  await apiFetch<unknown>(`/api/v1/admin/reports/${reportId}/remove-message`, {
+    method: "POST",
+    auth: true,
+  });
+}
+
+export async function dismissAdminReport(reportId: string): Promise<void> {
+  await apiFetch<unknown>(`/api/v1/admin/reports/${reportId}/dismiss`, {
     method: "POST",
     auth: true,
   });

@@ -24,3 +24,20 @@ export interface ApiErrorBody {
     retry_after?: number;
   };
 }
+
+/** PBI-33's pending-report view; replace with its generated schema when available. */
+export interface AdminReport {
+  id: string;
+  reason: "harassment" | "spam" | "other" | null;
+  created_at: string;
+  message: {
+    id: string;
+    body: string;
+    nickname: string;
+    created_at: string;
+  };
+  room: {
+    id: string;
+    name: string;
+  };
+}
