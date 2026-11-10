@@ -85,6 +85,9 @@ beforeEach(() => {
         nickname: "Quiet Otter",
       });
     }
+    if (url.endsWith("/messages") && (!init?.method || init.method === "GET")) {
+      return json([]);
+    }
     if (url.endsWith("/messages") && init?.method === "POST") {
       const { body } = JSON.parse(String(init.body)) as { body: string };
       return json(message("sent-1", body, "Quiet Otter"), 201);
@@ -132,7 +135,11 @@ test("sends through the API and shows the message once, even after its broadcast
 
   const sent = await screen.findByText("hello there", { selector: "p" });
   expect(sent.closest("article")?.dataset.ownMessage).toBe("true");
-  const post = requestTo(`/api/v1/rooms/${room.id}/messages`);
+  const post = fetchMock.mock.calls.find(
+    ([input, init]) =>
+      String(input).endsWith(`/api/v1/rooms/${room.id}/messages`) &&
+      init?.method === "POST",
+  )![1]!;
   expect(JSON.parse(String(post.body))).toEqual({ body: "hello there" });
   expect(new Headers(post.headers).get("Authorization")).toBe(
     "Bearer test-access-token",

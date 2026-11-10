@@ -99,7 +99,8 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    get?: never;
+    /** Get Message History */
+    get: operations["get_message_history_api_v1_rooms__room_id__messages_get"];
     put?: never;
     /** Send Message */
     post: operations["send_message_api_v1_rooms__room_id__messages_post"];
@@ -249,6 +250,33 @@ export interface components {
     MessageCreate: {
       /** Body */
       body: string;
+    };
+    /**
+     * MessageHistoryResponse
+     * @description A history item includes ownership without exposing the sender session id.
+     */
+    MessageHistoryResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Room Id
+       * Format: uuid
+       */
+      room_id: string;
+      /** Nickname */
+      nickname: string;
+      /** Body */
+      body: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Is Mine */
+      is_mine: boolean;
     };
     /**
      * MessageResponse
@@ -481,6 +509,39 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["LeaveResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_message_history_api_v1_rooms__room_id__messages_get: {
+    parameters: {
+      query?: {
+        after?: string | null;
+      };
+      header?: never;
+      path: {
+        room_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MessageHistoryResponse"][];
         };
       };
       /** @description Validation Error */
