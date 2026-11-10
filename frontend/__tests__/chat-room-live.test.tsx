@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -208,6 +209,37 @@ test("shows the API's message when sending is rejected", async () => {
   expect((await screen.findByRole("alert")).textContent).toMatch(/too fast/i);
   await waitFor(() => expect(input).toHaveProperty("value", "spam"));
 });
+
+test.each([
+  [409, "ALREADY_REPORTED", "You already reported this message."],
+  [403, "CANNOT_REPORT_OWN", "You cannot report your own message."],
+])(
+  "shows the API message when reporting returns %i",
+  async (status, code, apiMessage) => {
+    render(<ChatRoom room={room} />);
+    await screen.findByText(/you are/i);
+    act(() => channel.onMessage(message("other-1", "unsafe message")));
+
+    fetchMock.mockResolvedValueOnce(
+      json({ error: { code, message: apiMessage } }, status),
+    );
+    const messageText = await screen.findByText("unsafe message");
+    const bubble = within(messageText.closest("article")!);
+    fireEvent.click(bubble.getByRole("button", { name: "Report" }));
+    fireEvent.change(bubble.getByLabelText(/reason/i), {
+      target: { value: "spam" },
+    });
+    fireEvent.click(bubble.getByRole("button", { name: "Submit report" }));
+
+    expect((await bubble.findByRole("alert")).textContent).toBe(apiMessage);
+    const post = requestTo(`/api/v1/messages/other-1/reports`);
+    expect(post.method).toBe("POST");
+    expect(JSON.parse(String(post.body))).toEqual({ reason: "spam" });
+    expect(new Headers(post.headers).get("Authorization")).toBe(
+      "Bearer test-access-token",
+    );
+  },
+);
 
 test("shows the API's message when the room cannot be joined", async () => {
   fetchMock.mockResolvedValueOnce(

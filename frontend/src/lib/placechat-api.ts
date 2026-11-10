@@ -4,6 +4,7 @@ import type {
   ApiErrorBody,
   ChatMessage,
   JoinRoomResult,
+  ReportReason,
   RoomSummary,
 } from "@/lib/placechat-types";
 import { getAccessToken } from "@/lib/session";
@@ -138,6 +139,19 @@ export async function sendRoomMessage(
   return apiFetch<ChatMessage>(`/api/v1/rooms/${roomId}/messages`, {
     method: "POST",
     body: JSON.stringify({ body }),
+    auth: true,
+  });
+}
+
+export async function reportMessage(
+  messageId: string,
+  reason?: ReportReason,
+): Promise<void> {
+  if (shouldUseMocks()) return;
+
+  await apiFetch<unknown>(`/api/v1/messages/${messageId}/reports`, {
+    method: "POST",
+    body: JSON.stringify(reason ? { reason } : {}),
     auth: true,
   });
 }

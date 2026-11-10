@@ -18,9 +18,14 @@ import {
   heartbeatRoom,
   joinRoom,
   leaveRoom,
+  reportMessage,
   sendRoomMessage,
 } from "@/lib/placechat-api";
-import type { ChatMessage, RoomSummary } from "@/lib/placechat-types";
+import type {
+  ChatMessage,
+  ReportReason,
+  RoomSummary,
+} from "@/lib/placechat-types";
 import { useConnectionBanner } from "@/lib/use-connection-banner";
 import { type RoomChannelStatus, useRoomChannel } from "@/lib/use-room-channel";
 
@@ -99,6 +104,32 @@ function MessageBubble({
   message: ChatMessage;
   isMine: boolean;
 }) {
+  const [isReportOpen, setIsReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState<ReportReason | "">("");
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const [reportStatus, setReportStatus] = useState<string | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
+
+  const handleReport = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsSubmittingReport(true);
+    setReportError(null);
+
+    try {
+      await reportMessage(message.id, reportReason || undefined);
+      setIsReportOpen(false);
+      setReportStatus("Report submitted");
+    } catch (caught) {
+      setReportError(
+        caught instanceof Error
+          ? caught.message
+          : "We couldnâ€™t submit this report.",
+      );
+    } finally {
+      setIsSubmittingReport(false);
+    }
+  };
+
   return (
     <li className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
       <article
@@ -124,6 +155,73 @@ function MessageBubble({
         <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6">
           {message.body}
         </p>
+
+        {!isMine ? (
+          <div className="mt-2 border-t border-slate-100 pt-2">
+            {reportStatus ? (
+              <p
+                role="status"
+                className="text-xs font-semibold text-emerald-700"
+              >
+                {reportStatus}
+              </p>
+            ) : isReportOpen ? (
+              <form onSubmit={handleReport} className="space-y-2">
+                <label className="block text-xs font-medium text-slate-600">
+                  Reason <span className="font-normal">(optional)</span>
+                  <select
+                    value={reportReason}
+                    onChange={(event) =>
+                      setReportReason(event.target.value as ReportReason | "")
+                    }
+                    className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-800 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                  >
+                    <option value="">No reason selected</option>
+                    <option value="harassment">Harassment</option>
+                    <option value="spam">Spam</option>
+                    <option value="other">Other</option>
+                  </select>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="submit"
+                    disabled={isSubmittingReport}
+                    className="min-h-9 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600 disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {isSubmittingReport ? "Submittingâ€¦" : "Submit report"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSubmittingReport}
+                    onClick={() => {
+                      setIsReportOpen(false);
+                      setReportError(null);
+                    }}
+                    className="min-h-9 rounded-lg px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-violet-600"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsReportOpen(true)}
+                className="min-h-8 rounded-md px-2 text-xs font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-rose-700 focus-visible:outline-2 focus-visible:outline-violet-600"
+              >
+                Report
+              </button>
+            )}
+            {reportError ? (
+              <p
+                role="alert"
+                className="mt-2 text-xs font-medium text-rose-700"
+              >
+                {reportError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </article>
     </li>
   );
