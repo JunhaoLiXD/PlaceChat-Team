@@ -21,6 +21,7 @@ const channel = vi.hoisted(() => ({
   status: "connecting" as RoomChannelStatus,
   roomId: undefined as string | null | undefined,
   onMessage: (() => {}) as (message: ChatMessage) => void,
+  onParticipantCount: (() => {}) as (count: number) => void,
 }));
 
 const router = vi.hoisted(() => ({ push: vi.fn() }));
@@ -35,9 +36,11 @@ vi.mock("@/lib/use-room-channel", () => ({
   useRoomChannel: (
     roomId: string | null,
     onMessage: (message: ChatMessage) => void,
+    onParticipantCount?: (count: number) => void,
   ) => {
     channel.roomId = roomId;
     channel.onMessage = onMessage;
+    channel.onParticipantCount = onParticipantCount ?? (() => {});
     return channel.status;
   },
 }));
@@ -152,6 +155,18 @@ test("shows messages from other people as they arrive", async () => {
     selector: "p",
   });
   expect(incoming.closest("article")?.dataset.ownMessage).toBe("false");
+});
+
+test("updates the room header from live presence events", async () => {
+  render(<ChatRoom room={room} />);
+  await screen.findByText(/you are/i);
+  expect(screen.getByText("0 people here")).toBeDefined();
+
+  act(() => channel.onParticipantCount(1));
+  expect(screen.getByText("1 person here")).toBeDefined();
+
+  act(() => channel.onParticipantCount(8));
+  expect(screen.getByText("8 people here")).toBeDefined();
 });
 
 test("the status badge follows the realtime channel", async () => {

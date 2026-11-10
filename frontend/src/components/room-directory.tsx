@@ -3,8 +3,13 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { shouldUseMocks } from "@/lib/config";
 import { listRooms } from "@/lib/placechat-api";
 import type { RoomSummary } from "@/lib/placechat-types";
+import {
+  type RoomCountEvent,
+  useRoomCountsChannel,
+} from "@/lib/use-room-counts-channel";
 
 const categoryStyles: Record<RoomSummary["category"], string> = {
   academic: "bg-sky-50 text-sky-700 ring-sky-600/10",
@@ -16,6 +21,21 @@ const categoryStyles: Record<RoomSummary["category"], string> = {
 
 function formatCategory(category: RoomSummary["category"]) {
   return category.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+export function applyRoomCount(
+  rooms: RoomSummary[],
+  event: RoomCountEvent,
+): RoomSummary[] {
+  let changed = false;
+  const nextRooms = rooms.map((room) => {
+    if (room.id !== event.room_id || room.participant_count === event.count) {
+      return room;
+    }
+    changed = true;
+    return { ...room, participant_count: event.count };
+  });
+  return changed ? nextRooms : rooms;
 }
 
 function RoomCard({ room }: { room: RoomSummary }) {
@@ -99,6 +119,10 @@ export function RoomDirectory() {
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  useRoomCountsChannel(!shouldUseMocks(), (event) => {
+    setRooms((current) => applyRoomCount(current, event));
+  });
 
   const handleRetry = async () => {
     setIsLoading(true);
