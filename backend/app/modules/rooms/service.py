@@ -3,6 +3,8 @@
 Owner: Zhijie — PBI-07 (#11).
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -12,13 +14,14 @@ from sqlalchemy.orm import Session as DbSession
 from app.core.config import get_settings
 from app.core.errors import NotAMember, RoomNotFound
 from app.modules.nicknames.service import generate_nickname
-from app.modules.rooms import repository
+from app.modules.rooms import presence, repository
+from app.modules.rooms.models import Room
 from app.modules.rooms.schemas import JoinedRoom, JoinRoomResponse, RoomResponse
 
 
 def list_rooms(db: DbSession) -> list[RoomResponse]:
     """List active rooms with counts at one inclusive presence cutoff."""
-    since = utc_now() - timedelta(seconds=get_settings().presence_timeout_seconds)
+    since = presence_since(utc_now())
     return [
         RoomResponse.model_validate(room).model_copy(update={"participant_count": count})
         for room, count in repository.list_active_rooms(db, since)
@@ -73,16 +76,41 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def presence_since(now: datetime) -> datetime:
+    return now - timedelta(seconds=get_settings().presence_timeout_seconds)
+
+
+@contextmanager
+def _presence_transaction(
+    db: DbSession, room_id: UUID, *, sweep: bool = False
+) -> Iterator[tuple[Room, datetime]]:
+    pending = None
+    try:
+        with db.begin():
+            # Sample time only after waiting for the room's transaction lock.
+            repository.lock_room(db, room_id)
+            room = repository.get_active_room(db, room_id, lock=True)
+            if room is None:
+                raise RoomNotFound()
+            now = utc_now()
+            since = presence_since(now)
+            state = repository.get_presence_snapshot(db, room_id, since=None if sweep else since)
+            yield room, now
+            count = repository.refresh_presence_count(db, state, since)
+            # Reserve publication order while the DB lock still serializes changes.
+            # No waiting or network I/O happens until the transaction has committed.
+            pending = presence.reserve_count(room_id, count)
+    except BaseException:
+        if pending is not None:
+            pending.cancel()
+        raise
+    if pending is not None:
+        pending.publish()
+
+
 def join_room(db: DbSession, session_id: str, room_id: UUID) -> JoinRoomResponse:
     session_uuid = _session_uuid(session_id)
-    with db.begin():
-        # Lock before any membership read/write. Time is sampled after waiting,
-        # so a queued join never makes a reservation decision with an old cutoff.
-        repository.lock_room(db, room_id)
-        room = repository.get_active_room(db, room_id, lock=True)
-        if room is None:
-            raise RoomNotFound()
-        now = utc_now()
+    with _presence_transaction(db, room_id) as (room, now):
         since = now - timedelta(seconds=get_settings().nickname_hold_seconds)
         reserved = repository.reserved_members(db, room_id, since)
         own = next((member for member in reserved if member.session_id == session_uuid), None)
@@ -101,17 +129,23 @@ def join_room(db: DbSession, session_id: str, room_id: UUID) -> JoinRoomResponse
 
 
 def heartbeat_room(db: DbSession, session_id: str, room_id: UUID) -> None:
-    with db.begin():
-        if repository.get_active_room(db, room_id) is None:
-            raise RoomNotFound()
-        if not repository.heartbeat(db, room_id, _session_uuid(session_id), utc_now()):
+    with _presence_transaction(db, room_id) as (_, now):
+        if not repository.heartbeat(db, room_id, _session_uuid(session_id), now):
             raise NotAMember()
 
 
 def leave_room(db: DbSession, session_id: str, room_id: UUID) -> None:
-    with db.begin():
-        repository.lock_room(db, room_id)
-        if repository.get_active_room(db, room_id, lock=True) is None:
-            raise RoomNotFound()
-        if not repository.leave(db, room_id, _session_uuid(session_id), utc_now()):
+    with _presence_transaction(db, room_id) as (_, now):
+        if not repository.leave(db, room_id, _session_uuid(session_id), now):
             raise NotAMember()
+
+
+def sweep_room_presence(db: DbSession, room_id: UUID) -> None:
+    """Reconcile one room, including pending timeouts, without ending membership."""
+    try:
+        with _presence_transaction(db, room_id, sweep=True):
+            pass
+    except RoomNotFound:
+        # Discovery and the locked transaction use separate sessions; an archive
+        # between them makes this room a no-op.
+        return

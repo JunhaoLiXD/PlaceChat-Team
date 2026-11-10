@@ -45,7 +45,12 @@ def _session_factory() -> sessionmaker[Session]:
     return sessionmaker(bind=get_engine(), expire_on_commit=False)
 
 
+def create_session() -> Session:
+    """Create a short-lived session; callers must close it (usually with `with`)."""
+    return _session_factory()()
+
+
 def get_db() -> Iterator[Session]:
     """FastAPI dependency: one database session per request."""
-    with _session_factory()() as session:
+    with create_session() as session:
         yield session
