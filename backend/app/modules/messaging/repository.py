@@ -33,12 +33,8 @@ def get_recent_messages(
         )
 
     newest = query.order_by(Message.created_at.desc(), Message.id.desc()).limit(limit)
-    return list(
-        reversed(list(db.scalars(newest)))
-    )
+    return list(reversed(list(db.scalars(newest))))
 
 
 def get_message(db: Session, room_id: UUID, message_id: UUID) -> Message | None:
-    return db.scalar(
-        select(Message).where(Message.id == message_id, Message.room_id == room_id)
-    )
+    return db.scalar(select(Message).where(Message.id == message_id, Message.room_id == room_id))
