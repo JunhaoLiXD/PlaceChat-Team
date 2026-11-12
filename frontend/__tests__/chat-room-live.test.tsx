@@ -79,6 +79,7 @@ function json(body: unknown, status = 200) {
 }
 
 const fetchMock = vi.fn<typeof fetch>();
+const pendingResponses = new Set<(response: Response) => void>();
 
 beforeEach(() => {
   channel.status = "connecting";
@@ -116,8 +117,13 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // Release deferred requests even after a failed assertion, so queued room
+  // operations cannot leak into the next test.
+  await act(async () => {
+    for (const resolve of pendingResponses) resolve(json({}, 503));
+  });
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -135,11 +141,16 @@ function requestsTo(path: string) {
   return fetchMock.mock.calls.filter(([input]) => String(input).endsWith(path));
 }
 
-function defer<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
+function deferResponse() {
+  let finish!: (value: Response) => void;
+  const promise = new Promise<Response>((done) => {
+    finish = done;
   });
+  const resolve = (value: Response) => {
+    pendingResponses.delete(resolve);
+    finish(value);
+  };
+  pendingResponses.add(resolve);
   return { promise, resolve };
 }
 
@@ -372,17 +383,17 @@ test("StrictMode cleanup leaves only one heartbeat and never sends Leave", async
 });
 
 test("ignores a late join from a closed page without loading its history", async () => {
-  const oldJoin = defer<Response>();
+  const oldJoin = deferResponse();
   fetchMock.mockReturnValueOnce(oldJoin.promise);
   const first = render(<ChatRoom room={room} />);
   await waitFor(() => expect(requestsTo("/join")).toHaveLength(1));
   first.unmount();
   fetchMock.mockResolvedValueOnce(json({ room, nickname: "Calm Fox" }));
   render(<ChatRoom room={room} />);
-  await screen.findByText("Calm Fox");
   await act(async () => {
     oldJoin.resolve(json({ room, nickname: "Quiet Otter" }));
   });
+  await screen.findByText("Calm Fox");
   expect(screen.queryByText("Quiet Otter")).toBeNull();
   expect(requestsTo("/messages")).toHaveLength(1);
   expect(requestsTo("/leave")).toHaveLength(0);
@@ -397,43 +408,210 @@ test("a kept-alive room waits for its rejoin before restarting one heartbeat", a
   );
   const { rerender } = render(page("visible"));
   await screen.findByText(/you are/i);
+  const input = screen.getByLabelText("Message Library West");
+  fireEvent.change(input, { target: { value: "saved draft" } });
+  expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+    "disabled",
+    false,
+  );
   rerender(page("hidden"));
   await act(() => vi.advanceTimersByTimeAsync(61_000));
   expect(requestsTo("/heartbeat")).toHaveLength(0);
 
-  const rejoin = defer<Response>();
+  const rejoin = deferResponse();
   fetchMock.mockReturnValueOnce(rejoin.promise);
   await act(async () => {
     rerender(page("visible"));
   });
   expect(requestsTo("/join")).toHaveLength(2);
+  expect(input).toHaveProperty("value", "saved draft");
+  expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  await act(async () => {
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    fireEvent.submit(input.closest("form")!);
+  });
+  expect(
+    requestsTo("/messages").filter(([, init]) => init?.method === "POST"),
+  ).toHaveLength(0);
   await act(() => vi.advanceTimersByTimeAsync(15_000));
   expect(requestsTo("/heartbeat")).toHaveLength(0);
   await act(async () => {
     rejoin.resolve(json({ room, nickname: "Calm Fox" }));
   });
   expect(screen.getByText("Calm Fox")).toBeDefined();
+  expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+    "disabled",
+    false,
+  );
+  await act(async () => {
+    fireEvent.submit(input.closest("form")!);
+  });
+  expect(
+    requestsTo("/messages").filter(([, init]) => init?.method === "POST"),
+  ).toHaveLength(1);
   await act(() => vi.advanceTimersByTimeAsync(15_000));
   expect(requestsTo("/heartbeat")).toHaveLength(1);
   expect(requestsTo("/leave")).toHaveLength(0);
 });
 
-test("intentional Leave during a pending join releases it and ignores its late result", async () => {
+test("a failed Activity rejoin shows its error and keeps the preserved draft unsendable", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-  const pending = defer<Response>();
-  fetchMock.mockReturnValueOnce(pending.promise);
+  const page = (mode: "visible" | "hidden") => (
+    <Activity mode={mode}>
+      <ChatRoom room={room} />
+    </Activity>
+  );
+  const { rerender } = render(page("visible"));
+  await screen.findByText(/you are/i);
+  const input = screen.getByLabelText("Message Library West");
+  fireEvent.change(input, { target: { value: "saved draft" } });
+  rerender(page("hidden"));
+  await act(() => vi.advanceTimersByTimeAsync(61_000));
+  const rejoin = deferResponse();
+  fetchMock.mockReturnValueOnce(rejoin.promise);
   await act(async () => {
-    render(<ChatRoom room={room} />);
+    rerender(page("visible"));
   });
-  expect(requestsTo("/join")).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "Leave" }));
   await act(async () => {
-    pending.resolve(json({ room, nickname: "Quiet Otter" }));
+    rejoin.resolve(
+      json({ error: { message: "This visit could not join." } }, 503),
+    );
   });
-  await waitFor(() => expect(router.push).toHaveBeenCalledWith("/"));
-  expect(requestsTo("/leave")).toHaveLength(1);
-  expect(requestsTo("/messages")).toHaveLength(0);
+
+  expect(screen.getByRole("alert").textContent).toBe(
+    "This visit could not join.",
+  );
   expect(screen.queryByText("Quiet Otter")).toBeNull();
+  expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  await act(async () => {
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    fireEvent.submit(input.closest("form")!);
+  });
+  expect(
+    requestsTo("/messages").filter(([, init]) => init?.method === "POST"),
+  ).toHaveLength(0);
   await act(() => vi.advanceTimersByTimeAsync(30_000));
   expect(requestsTo("/heartbeat")).toHaveLength(0);
+  expect(requestsTo("/leave")).toHaveLength(0);
 });
+
+test.each([
+  ["Leave", () => screen.getByRole("button", { name: "Leave" })],
+  ["All rooms/Back", () => screen.getByRole("link", { name: /all rooms/i })],
+])(
+  "%s navigates immediately during a pending join and ignores its late result",
+  async (_name, control) => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const pending = deferResponse();
+    fetchMock.mockReturnValueOnce(pending.promise);
+    await act(async () => {
+      render(<ChatRoom room={room} />);
+    });
+    expect(requestsTo("/join")).toHaveLength(1);
+    fireEvent.click(control());
+    expect(router.push).toHaveBeenCalledExactlyOnceWith("/");
+    expect(channel.roomId).toBeNull();
+    await act(async () => {
+      pending.resolve(json({ room, nickname: "Quiet Otter" }));
+    });
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/"));
+    expect(requestsTo("/leave")).toHaveLength(1);
+    expect(requestsTo("/messages")).toHaveLength(0);
+    expect(screen.queryByText("Quiet Otter")).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(requestsTo("/heartbeat")).toHaveLength(0);
+  },
+);
+
+test.each([
+  ["join", 200, "remount"],
+  ["leave", 200, "remount"],
+  ["leave", 503, "remount"],
+  ["join", 200, "Activity"],
+  ["leave", 200, "Activity"],
+] as const)(
+  "old %s pending (cleanup HTTP %i, %s return) cannot end the new membership",
+  async (pendingStage, cleanupStatus, revisit) => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const oldJoin = deferResponse();
+    const oldLeave = deferResponse();
+    let joined = false;
+    let joinCount = 0;
+    const operations: string[] = [];
+    const defaultFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url, init) => {
+      if (String(url).endsWith("/join")) {
+        const index = ++joinCount;
+        operations.push(`join ${index}`);
+        const response =
+          index === 1 && pendingStage === "join"
+            ? await oldJoin.promise
+            : json({
+                room,
+                nickname: index === 1 ? "Quiet Otter" : "Calm Fox",
+              });
+        joined = true;
+        return response;
+      }
+      if (String(url).endsWith("/leave")) {
+        operations.push("leave");
+        const response = await oldLeave.promise;
+        joined = false;
+        return response;
+      }
+      return defaultFetch(url, init);
+    });
+
+    const page = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <ChatRoom room={room} />
+      </Activity>
+    );
+    const first = render(page("visible"));
+    await act(async () => {});
+    if (pendingStage === "leave") await screen.findByText(/you are/i);
+    fireEvent.click(screen.getByRole("button", { name: "Leave" }));
+    expect(router.push).toHaveBeenCalledExactlyOnceWith("/");
+    if (revisit === "Activity") first.rerender(page("hidden"));
+    else first.unmount();
+    await act(async () => {
+      if (revisit === "Activity") first.rerender(page("visible"));
+      else render(page("visible"));
+    });
+    expect(requestsTo("/join")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Leave" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+
+    await act(async () => {
+      oldJoin.resolve(json({ room, nickname: "Quiet Otter" }));
+    });
+    expect(requestsTo("/leave")).toHaveLength(1);
+    expect(requestsTo("/join")).toHaveLength(1);
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(requestsTo("/heartbeat")).toHaveLength(0);
+    await act(async () => {
+      oldLeave.resolve(json({ status: "ok" }, cleanupStatus));
+    });
+
+    expect(operations).toEqual(["join 1", "leave", "join 2"]);
+    expect(joined).toBe(true);
+    expect(screen.getByText("Calm Fox")).toBeDefined();
+    expect(screen.queryByText("Quiet Otter")).toBeNull();
+    expect(router.push).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    expect(requestsTo("/heartbeat")).toHaveLength(1);
+    expect(auth.signOut).not.toHaveBeenCalled();
+  },
+);
