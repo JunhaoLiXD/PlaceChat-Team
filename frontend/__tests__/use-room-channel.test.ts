@@ -106,7 +106,7 @@ describe("useRoomChannel", () => {
   });
 
   test("leaves the old channel when the room changes or the page closes", async () => {
-    const { hook, channel } = await connected();
+    const { hook, channel, onMessage } = await connected();
 
     hook.rerender({ id: "room-2" });
     expect(hook.result.current).toBe("connecting");
@@ -116,7 +116,9 @@ describe("useRoomChannel", () => {
 
     // Late events from the old channel no longer change the new room's status.
     act(() => channel.status?.("SUBSCRIBED"));
+    act(() => channel.broadcast?.({ payload: message("room-1") }));
     expect(hook.result.current).toBe("connecting");
+    expect(onMessage).not.toHaveBeenCalled();
 
     hook.unmount();
     expect(fake.client.removeChannel).toHaveBeenCalledTimes(2);

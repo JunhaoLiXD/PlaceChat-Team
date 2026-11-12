@@ -241,13 +241,18 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
   const [sendError, setSendError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isLeaving, setIsLeaving] = useState(false);
+  const leaveVisitRef = useRef<(() => Promise<void>) | null>(null);
   const router = useRouter();
 
   const trimmedDraft = draft.trim();
   const messageLength = Array.from(trimmedDraft).length;
   const isTooLong = messageLength > MESSAGE_MAX_LENGTH;
   const canSend =
-    nickname !== null && messageLength > 0 && !isTooLong && !isSending;
+    nickname !== null &&
+    messageLength > 0 &&
+    !isTooLong &&
+    !isSending &&
+    !isLeaving;
 
   const participantLabel = useMemo(
     () =>
@@ -263,16 +268,35 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
 
   useEffect(() => {
     let cancelled = false;
+    let interval: number | undefined;
+    const request = joinRoom(room.id);
+    const stop = () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+    const leave = async () => {
+      stop();
+      // An intentional Leave must also release a join still in flight.
+      await request;
+      await leaveRoom(room.id);
+    };
+    leaveVisitRef.current = leave;
 
     // This also runs when Next shows a kept-alive page again (React <Activity>),
     // so a Leave from the earlier visit must not keep the controls disabled.
     async function join() {
       try {
-        const result = await joinRoom(room.id);
-        if (!cancelled) {
-          setNickname(result.nickname);
-          setIsLeaving(false);
-        }
+        const result = await request;
+        if (cancelled) return;
+        setNickname(result.nickname);
+        setJoinError(null);
+        setIsLeaving(false);
+        // Start only after this visit's join, including Activity remounts.
+        interval = window.setInterval(() => {
+          void heartbeatRoom(room.id).catch(() => {
+            // Retry on the next tick; the banner reports Realtime drops.
+          });
+        }, HEARTBEAT_INTERVAL_MS);
         if (!mockMode) {
           const history = await getRoomMessages(room.id);
           if (!cancelled) {
@@ -294,24 +318,15 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     void join();
 
     return () => {
-      cancelled = true;
+      // Refresh, closed tabs, and React cleanup preserve the backend's hold.
+      stop();
+      if (leaveVisitRef.current === leave) leaveVisitRef.current = null;
     };
-  }, [mockMode, room]);
-
-  useEffect(() => {
-    if (!nickname) return;
-
-    const interval = window.setInterval(() => {
-      void heartbeatRoom(room.id).catch(() => {
-        // A missed heartbeat is retried on the next tick; the banner reports Realtime drops.
-      });
-    }, HEARTBEAT_INTERVAL_MS);
-
-    return () => window.clearInterval(interval);
-  }, [nickname, room.id]);
+  }, [mockMode, room.id]);
 
   const handleSubmit = async (event?: FormEvent) => {
     event?.preventDefault();
+    if (isLeaving) return;
     setSendError(null);
 
     if (messageLength === 0) return;
@@ -356,12 +371,10 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     if (isLeaving) return;
     setIsLeaving(true);
 
-    if (nickname) {
-      try {
-        await leaveRoom(room.id);
-      } catch {
-        // Still go back: presence times out after 30 seconds without heartbeats.
-      }
+    try {
+      await leaveVisitRef.current?.();
+    } catch {
+      // Still go back: presence times out after 30 seconds without heartbeats.
     }
     router.push("/");
   };

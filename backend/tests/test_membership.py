@@ -17,6 +17,7 @@ from app.core.config import Settings
 from app.core.db import Base, get_db
 from app.core.errors import NotAMember, RoomNotFound
 from app.main import create_app
+from app.modules.nicknames import service as nicknames
 from app.modules.rooms import presence, repository, service
 from app.modules.rooms.models import Room, RoomMember, RoomPresenceCount
 
@@ -124,7 +125,7 @@ def test_join_response_and_token_identity(client: TestClient, db: Session, room_
     assert db.scalar(select(func.count()).select_from(RoomMember)) == 1
 
 
-@pytest.mark.parametrize("age", [0, 30, 31, 59.999, 60])
+@pytest.mark.parametrize("age", [0, 30, 31, 59, 59.999, 60])
 def test_rejoin_keeps_reserved_nickname(
     client: TestClient,
     db: Session,
@@ -141,8 +142,8 @@ def test_rejoin_keeps_reserved_nickname(
     generator.assert_not_called()
 
 
-@pytest.mark.parametrize("age,left", [(60.001, False), (120, False), (0, True)])
-def test_expired_or_left_rejoin_calls_generator(
+@pytest.mark.parametrize("age,left", [(60.000001, False), (61, False), (120, False), (0, True)])
+def test_expired_or_left_rejoin_cannot_redraw_previous_nickname(
     client: TestClient,
     db: Session,
     room_id: UUID,
@@ -151,12 +152,19 @@ def test_expired_or_left_rejoin_calls_generator(
     left: bool,
 ) -> None:
     add_member(db, room_id, age=age, left=left)
-    generator = Mock(return_value="Calm Fox")
+    # Exercise the real generator, deterministically preferring the caller's old
+    # name whenever it is eligible. A lucky random draw must not hide a regression.
+    monkeypatch.setattr(
+        nicknames,
+        "choice",
+        lambda available: next(name for name in ("Quiet Otter", "Calm Fox") if name in available),
+    )
+    generator = Mock(wraps=service.generate_nickname)
     monkeypatch.setattr(service, "generate_nickname", generator)
     response = client.post(f"/api/v1/rooms/{room_id}/join")
     assert response.status_code == 200
     assert response.json()["nickname"] == "Calm Fox"
-    generator.assert_called_once_with({"Quiet Otter"} if left else set())
+    generator.assert_called_once_with({"Quiet Otter"})
     member = db.get(RoomMember, (room_id, SESSION_ID))
     assert member.left_at is None
     assert member.joined_at.replace(tzinfo=UTC) == NOW
@@ -185,19 +193,23 @@ def test_all_and_only_reserved_room_names_passed_to_generator(
     generator.assert_called_once_with({"Quiet Otter", "Bright Fox"})
 
 
-def test_different_joiners_cannot_take_reserved_name(
+@pytest.mark.parametrize("age,expected", [(59, "Calm Fox"), (60, "Calm Fox"), (61, "Quiet Otter")])
+def test_other_session_can_claim_name_only_after_hold_expires(
     client: TestClient,
+    db: Session,
     room_id: UUID,
     monkeypatch: pytest.MonkeyPatch,
+    age: float,
+    expected: str,
 ) -> None:
     def choose(taken: set[str]) -> str:
         return next(name for name in ["Quiet Otter", "Calm Fox"] if name not in taken)
 
     monkeypatch.setattr(service, "generate_nickname", choose)
-    first = client.post(f"/api/v1/rooms/{room_id}/join").json()
-    client.app.dependency_overrides[get_current_session] = lambda: Identity(str(uuid4()), True)
-    second = client.post(f"/api/v1/rooms/{room_id}/join").json()
-    assert (first["nickname"], second["nickname"]) == ("Quiet Otter", "Calm Fox")
+    add_member(db, room_id, session_id=uuid4(), age=age)
+    response = client.post(f"/api/v1/rooms/{room_id}/join")
+    assert response.status_code == 200
+    assert response.json()["nickname"] == expected
 
 
 def test_lock_first_and_same_key_for_same_room(
