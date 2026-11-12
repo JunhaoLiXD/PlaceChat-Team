@@ -154,6 +154,33 @@ function deferResponse() {
   return { promise, resolve };
 }
 
+async function rejoinActivityWithDraft() {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const page = (mode: "visible" | "hidden") => (
+    <Activity mode={mode}>
+      <ChatRoom room={room} />
+    </Activity>
+  );
+  const { rerender } = render(page("visible"));
+  await screen.findByText(/you are/i);
+  const input = screen.getByLabelText("Message Library West");
+  fireEvent.change(input, { target: { value: "saved draft" } });
+  expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+    "disabled",
+    false,
+  );
+  rerender(page("hidden"));
+  await act(() => vi.advanceTimersByTimeAsync(61_000));
+  expect(requestsTo("/heartbeat")).toHaveLength(0);
+
+  const rejoin = deferResponse();
+  fetchMock.mockReturnValueOnce(rejoin.promise);
+  await act(async () => {
+    rerender(page("visible"));
+  });
+  return { input, rejoin };
+}
+
 test("joins with the session token and starts without demo messages", async () => {
   render(<ChatRoom room={room} />);
 
@@ -400,29 +427,7 @@ test("ignores a late join from a closed page without loading its history", async
 });
 
 test("a kept-alive room waits for its rejoin before restarting one heartbeat", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-  const page = (mode: "visible" | "hidden") => (
-    <Activity mode={mode}>
-      <ChatRoom room={room} />
-    </Activity>
-  );
-  const { rerender } = render(page("visible"));
-  await screen.findByText(/you are/i);
-  const input = screen.getByLabelText("Message Library West");
-  fireEvent.change(input, { target: { value: "saved draft" } });
-  expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
-    "disabled",
-    false,
-  );
-  rerender(page("hidden"));
-  await act(() => vi.advanceTimersByTimeAsync(61_000));
-  expect(requestsTo("/heartbeat")).toHaveLength(0);
-
-  const rejoin = deferResponse();
-  fetchMock.mockReturnValueOnce(rejoin.promise);
-  await act(async () => {
-    rerender(page("visible"));
-  });
+  const { input, rejoin } = await rejoinActivityWithDraft();
   expect(requestsTo("/join")).toHaveLength(2);
   expect(input).toHaveProperty("value", "saved draft");
   expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
@@ -458,23 +463,7 @@ test("a kept-alive room waits for its rejoin before restarting one heartbeat", a
 });
 
 test("a failed Activity rejoin shows its error and keeps the preserved draft unsendable", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-  const page = (mode: "visible" | "hidden") => (
-    <Activity mode={mode}>
-      <ChatRoom room={room} />
-    </Activity>
-  );
-  const { rerender } = render(page("visible"));
-  await screen.findByText(/you are/i);
-  const input = screen.getByLabelText("Message Library West");
-  fireEvent.change(input, { target: { value: "saved draft" } });
-  rerender(page("hidden"));
-  await act(() => vi.advanceTimersByTimeAsync(61_000));
-  const rejoin = deferResponse();
-  fetchMock.mockReturnValueOnce(rejoin.promise);
-  await act(async () => {
-    rerender(page("visible"));
-  });
+  const { input, rejoin } = await rejoinActivityWithDraft();
   await act(async () => {
     rejoin.resolve(
       json({ error: { message: "This visit could not join." } }, 503),
