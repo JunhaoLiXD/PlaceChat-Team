@@ -241,13 +241,22 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
   const [sendError, setSendError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isLeaving, setIsLeaving] = useState(false);
+  // A saved nickname is not proof that the current Activity visit has joined.
+  const [hasJoined, setHasJoined] = useState(false);
+  const joinedVisitRef = useRef(false);
+  const leaveVisitRef = useRef<(() => void) | null>(null);
   const router = useRouter();
 
   const trimmedDraft = draft.trim();
   const messageLength = Array.from(trimmedDraft).length;
   const isTooLong = messageLength > MESSAGE_MAX_LENGTH;
   const canSend =
-    nickname !== null && messageLength > 0 && !isTooLong && !isSending;
+    hasJoined &&
+    nickname !== null &&
+    messageLength > 0 &&
+    !isTooLong &&
+    !isSending &&
+    !isLeaving;
 
   const participantLabel = useMemo(
     () =>
@@ -255,24 +264,51 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     [room.participant_count],
   );
 
-  const channelStatus = useRoomChannel(mockMode ? null : room.id, (message) =>
-    setMessages((current) => mergeMessages(current, [message])),
+  const channelStatus = useRoomChannel(
+    mockMode || isLeaving ? null : room.id,
+    (message) => setMessages((current) => mergeMessages(current, [message])),
   );
   const badge = CONNECTION_BADGES[mockMode ? "demo" : channelStatus];
   const banner = useConnectionBanner(channelStatus);
 
   useEffect(() => {
     let cancelled = false;
+    let interval: number | undefined;
+    const request = joinRoom(room.id);
+    const stop = () => {
+      cancelled = true;
+      joinedVisitRef.current = false;
+      setHasJoined(false);
+      window.clearInterval(interval);
+    };
+    const leave = () => {
+      if (cancelled) return;
+      stop();
+      // Queue cleanup after pending joins, without blocking navigation. A later
+      // join in this tab waits for it, even if this component has unmounted.
+      void leaveRoom(room.id).catch(() => {
+        // Presence still expires if the server cannot confirm Leave.
+      });
+    };
+    leaveVisitRef.current = leave;
 
     // This also runs when Next shows a kept-alive page again (React <Activity>),
     // so a Leave from the earlier visit must not keep the controls disabled.
     async function join() {
       try {
-        const result = await joinRoom(room.id);
-        if (!cancelled) {
-          setNickname(result.nickname);
-          setIsLeaving(false);
-        }
+        const result = await request;
+        if (cancelled) return;
+        joinedVisitRef.current = true;
+        setHasJoined(true);
+        setNickname(result.nickname);
+        setJoinError(null);
+        setIsLeaving(false);
+        // Start only after this visit's join, including Activity remounts.
+        interval = window.setInterval(() => {
+          void heartbeatRoom(room.id).catch(() => {
+            // Retry on the next tick; the banner reports Realtime drops.
+          });
+        }, HEARTBEAT_INTERVAL_MS);
         if (!mockMode) {
           const history = await getRoomMessages(room.id);
           if (!cancelled) {
@@ -294,24 +330,17 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     void join();
 
     return () => {
-      cancelled = true;
+      // Refresh, closed tabs, and React cleanup preserve the backend's hold.
+      stop();
+      setJoinError(null);
+      setIsLeaving(false);
+      if (leaveVisitRef.current === leave) leaveVisitRef.current = null;
     };
-  }, [mockMode, room]);
-
-  useEffect(() => {
-    if (!nickname) return;
-
-    const interval = window.setInterval(() => {
-      void heartbeatRoom(room.id).catch(() => {
-        // A missed heartbeat is retried on the next tick; the banner reports Realtime drops.
-      });
-    }, HEARTBEAT_INTERVAL_MS);
-
-    return () => window.clearInterval(interval);
-  }, [nickname, room.id]);
+  }, [mockMode, room.id]);
 
   const handleSubmit = async (event?: FormEvent) => {
     event?.preventDefault();
+    if (isLeaving) return;
     setSendError(null);
 
     if (messageLength === 0) return;
@@ -321,7 +350,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
       return;
     }
 
-    if (!nickname) {
+    if (!hasJoined || !joinedVisitRef.current || !nickname) {
       setSendError("Wait a moment while we finish joining the room.");
       return;
     }
@@ -349,20 +378,14 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     }
   };
 
-  // Leave frees the nickname right away (§5.2). Unmounting the page then closes the
-  // channel and stops the heartbeat, so no more messages arrive from this room.
-  const handleLeave = async (event?: MouseEvent) => {
+  // Stop local activity and navigate now; ordered membership cleanup continues
+  // even while a join or Leave response is stalled.
+  const handleLeave = (event?: MouseEvent) => {
     event?.preventDefault();
     if (isLeaving) return;
     setIsLeaving(true);
 
-    if (nickname) {
-      try {
-        await leaveRoom(room.id);
-      } catch {
-        // Still go back: presence times out after 30 seconds without heartbeats.
-      }
-    }
+    leaveVisitRef.current?.();
     router.push("/");
   };
 
@@ -422,15 +445,17 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
         <section className="flex min-h-[calc(100vh-5.5rem)] flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 shadow-xl shadow-slate-200/70 sm:min-h-[calc(100vh-7rem)]">
           <div className="flex min-h-14 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 sm:px-6">
             <div className="min-w-0">
-              {nickname ? (
+              {joinError ? (
+                <p role="alert" className="text-sm text-slate-500">
+                  {joinError}
+                </p>
+              ) : hasJoined && nickname ? (
                 <p className="truncate text-sm text-slate-600">
                   You are{" "}
                   <span className="font-bold text-slate-950">{nickname}</span>
                 </p>
               ) : (
-                <p className="text-sm text-slate-500">
-                  {joinError ?? "Finding your nickname…"}
-                </p>
+                <p className="text-sm text-slate-500">Finding your nickname…</p>
               )}
             </div>
             <div

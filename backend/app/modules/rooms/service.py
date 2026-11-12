@@ -119,8 +119,9 @@ def join_room(db: DbSession, session_id: str, room_id: UUID) -> JoinRoomResponse
         else:
             taken = {member.nickname for member in reserved}
             previous = repository.get_member(db, room_id, session_uuid)
-            if previous is not None and previous.left_at is not None:
-                # A fresh name for this caller; the old name is still free for others.
+            if previous is not None:
+                # Expiration and explicit Leave both require a different name for
+                # this caller; the released name is still available to others.
                 taken.add(previous.nickname)
             nickname = generate_nickname(taken)
         repository.upsert_member(db, room_id, session_uuid, nickname, now)

@@ -217,7 +217,9 @@ def test_deleting_auth_user_cascades_only_their_memberships(
         )
 
 
-@pytest.mark.parametrize("age,reserved", [(30, True), (60, True), (60.000001, False)])
+@pytest.mark.parametrize(
+    "age,reserved", [(30, True), (59, True), (60, True), (60.000001, False), (61, False)]
+)
 def test_postgres_reservation_boundary(
     pg_engine: Engine, pg_room: UUID, monkeypatch: pytest.MonkeyPatch, age: float, reserved: bool
 ) -> None:
@@ -226,7 +228,11 @@ def test_postgres_reservation_boundary(
     with Session(pg_engine) as db:
         repository.upsert_member(db, pg_room, user_id, "Quiet Otter", NOW - timedelta(seconds=age))
         db.commit()
-    monkeypatch.setattr(service, "generate_nickname", lambda taken: "Calm Fox")
+    monkeypatch.setattr(
+        service,
+        "generate_nickname",
+        lambda taken: next(name for name in ("Quiet Otter", "Calm Fox") if name not in taken),
+    )
     result = join(pg_engine, pg_room, user_id)
     assert result.nickname == ("Quiet Otter" if reserved else "Calm Fox")
 
@@ -282,7 +288,11 @@ def test_queued_join_samples_time_after_acquiring_lock(
     user_id = new_user(pg_engine)
     current_time = [NOW]
     monkeypatch.setattr(service, "utc_now", lambda: current_time[0])
-    monkeypatch.setattr(service, "generate_nickname", lambda taken: "Calm Fox")
+    monkeypatch.setattr(
+        service,
+        "generate_nickname",
+        lambda taken: next(name for name in ("Quiet Otter", "Calm Fox") if name not in taken),
+    )
     with Session(pg_engine) as blocker:
         repository.upsert_member(
             db=blocker,
