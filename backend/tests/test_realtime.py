@@ -1,5 +1,6 @@
 """publish() sends one REST broadcast per event and never raises (§4, §6.5)."""
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable
@@ -85,3 +86,47 @@ def test_publish_without_settings_sends_nothing(
 
     assert sent == []
     assert "Realtime is not configured" in caplog.text
+
+
+@pytest.mark.usefixtures("configured")
+@pytest.mark.parametrize("status", [202, 500])
+def test_async_broadcast_uses_same_private_contract_and_reports_failure(status):
+    sent = []
+
+    def handle(request):
+        sent.append(request)
+        return httpx.Response(status)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            assert await realtime.publish_async(
+                client, "rooms", "room.count", {"room_id": "r1", "count": 0}
+            ) is (status == 202)
+
+    asyncio.run(scenario())
+    [request] = sent
+    assert request.method == "POST"
+    assert request.url.params["private"] == "true"
+    assert request.url.path.endswith("/rooms/events/room.count")
+    assert request.headers["apikey"] == SECRET
+    assert json.loads(request.content) == {"room_id": "r1", "count": 0}
+
+
+@pytest.mark.usefixtures("configured")
+def test_async_broadcast_has_a_total_deadline(monkeypatch):
+    monkeypatch.setattr(realtime, "TIMEOUT_SECONDS", 0.01)
+
+    async def scenario():
+        cancelled = asyncio.Event()
+
+        async def stalled(request):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(stalled)) as client:
+            assert not await realtime.publish_async(client, "rooms", "room.count", {"count": 0})
+        assert cancelled.is_set()
+
+    asyncio.run(scenario())

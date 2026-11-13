@@ -9,20 +9,22 @@ from app.api.health import router as health_router
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.errors import register_error_handlers
+from app.modules.rooms.presence import publisher_lifespan
 from app.modules.rooms.sweeper import run_presence_sweeper
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    stop = asyncio.Event()
-    task = asyncio.create_task(run_presence_sweeper(stop), name="presence-sweeper")
-    try:
-        yield
-    finally:
-        # Wake an idle task immediately; allow an in-flight worker to finish and close
-        # its session instead of abandoning synchronous work during cancellation.
-        stop.set()
-        await task
+    async with publisher_lifespan() as publisher:
+        app.state.presence_publisher = publisher
+        stop = asyncio.Event()
+        task = asyncio.create_task(run_presence_sweeper(stop), name="presence-sweeper")
+        try:
+            yield
+        finally:
+            # Stop the producer first, then drain/cancel the owned async publisher.
+            stop.set()
+            await task
 
 
 def create_app() -> FastAPI:
