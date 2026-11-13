@@ -122,9 +122,7 @@ def test_history_after_returns_only_newer_messages(
     assert [item["id"] for item in response.json()] == [str(messages[1].id), str(messages[2].id)]
 
 
-def test_history_hides_expired_messages(
-    client: TestClient, db: Session, room: Room
-) -> None:
+def test_history_hides_expired_messages(client: TestClient, db: Session, room: Room) -> None:
     now = datetime.now(UTC)
     visible = add_message(db, room.id, now - timedelta(days=6), False)
     expired = add_message(db, room.id, now - timedelta(days=8), False)
@@ -136,9 +134,7 @@ def test_history_hides_expired_messages(
     assert str(expired.id) not in [item["id"] for item in response.json()]
 
 
-def test_history_hides_removed_messages(
-    client: TestClient, db: Session, room: Room
-) -> None:
+def test_history_hides_removed_messages(client: TestClient, db: Session, room: Room) -> None:
     visible = add_message(db, room.id, datetime.now(UTC), False)
     removed = add_message(db, room.id, datetime.now(UTC), False)
     removed.removed_at = datetime.now(UTC)
@@ -150,9 +146,7 @@ def test_history_hides_removed_messages(
     assert str(removed.id) not in [item["id"] for item in response.json()]
 
 
-def test_history_after_skips_removed_messages(
-    client: TestClient, db: Session, room: Room
-) -> None:
+def test_history_after_skips_removed_messages(client: TestClient, db: Session, room: Room) -> None:
     now = datetime.now(UTC)
     cursor = add_message(db, room.id, now, False)
     removed = add_message(db, room.id, now + timedelta(seconds=1), False)
