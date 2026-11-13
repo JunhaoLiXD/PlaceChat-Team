@@ -4,6 +4,7 @@ FastAPI is the only sender. It calls Realtime's REST broadcast endpoint with the
 browsers subscribe to private channels and can only receive.
 """
 
+import asyncio
 import logging
 from functools import lru_cache
 from typing import Any
@@ -31,24 +32,52 @@ def broadcast_url(supabase_url: str, topic: str, event: str) -> str:
     return f"{supabase_url.rstrip('/')}/realtime/v1/api/broadcast/{topic_path}/events/{event_path}"
 
 
-def publish(topic: str, event: str, payload: dict[str, Any]) -> None:
-    """Broadcast `event` with `payload` to the private Realtime channel `topic`.
-
-    Never put `session_id` in a payload. Failures are logged, not raised: callers store first
-    and publish second, and browsers recover missed events over REST (§4).
-    """
+def _request(topic: str, event: str, payload: dict[str, Any]) -> httpx.Request | None:
     settings = get_settings()
     if not settings.supabase_url or settings.supabase_secret_key is None:
         logger.warning("Realtime is not configured; dropped %s %s", topic, event)
+        return None
+    return httpx.Request(
+        "POST",
+        broadcast_url(settings.supabase_url, topic, event),
+        params={"private": "true"},
+        headers={"apikey": settings.supabase_secret_key.get_secret_value()},
+        json=payload,
+    )
+
+
+def publish(topic: str, event: str, payload: dict[str, Any]) -> None:
+    """Store first, then broadcast privately; failures never undo a commit (§4)."""
+    request = _request(topic, event, payload)
+    if request is None:
         return
 
     try:
-        response = get_http_client().post(
-            broadcast_url(settings.supabase_url, topic, event),
-            params={"private": "true"},
-            headers={"apikey": settings.supabase_secret_key.get_secret_value()},
-            json=payload,
-        )
+        response = get_http_client().send(request)
         response.raise_for_status()
     except httpx.HTTPError as error:
         logger.error("Realtime publish failed for %s %s: %r", topic, event, error)
+
+
+def create_async_client() -> httpx.AsyncClient:
+    """Owned and closed by the count publisher, separate from message requests."""
+    return httpx.AsyncClient(
+        timeout=TIMEOUT_SECONDS,
+        limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+    )
+
+
+async def publish_async(
+    client: httpx.AsyncClient, topic: str, event: str, payload: dict[str, Any]
+) -> bool:
+    request = _request(topic, event, payload)
+    if request is None:
+        return False
+    try:
+        async with asyncio.timeout(TIMEOUT_SECONDS):
+            response = await client.send(request)
+            response.raise_for_status()
+    except (httpx.HTTPError, TimeoutError) as error:
+        logger.error("Realtime publish failed for %s %s: %r", topic, event, error)
+        return False
+    return True

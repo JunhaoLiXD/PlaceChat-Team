@@ -28,7 +28,8 @@ async def run_presence_sweeper(stop: asyncio.Event) -> None:
     interval = get_settings().sweeper_interval_seconds
     while not stop.is_set():
         try:
-            # Both SQLAlchemy and the Realtime HTTP client are synchronous.
+            # Only the synchronous DB iteration uses a request-pool thread.
+            # Count notification never waits for the background network publisher.
             await run_in_threadpool(sweep_presence)
         except Exception:
             logger.exception("Presence sweep iteration failed")

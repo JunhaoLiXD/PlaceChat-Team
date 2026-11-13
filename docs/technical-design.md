@@ -204,7 +204,7 @@ All tables live in Supabase PostgreSQL in the `public` schema, and every table h
 - **Joining, leaving, and heartbeats** each run in one transaction that first takes `pg_advisory_xact_lock` on the room. Two people joining at the same moment can therefore never get the same nickname.
 - **Rate limit:** count the session's messages from the last 10 seconds. At 5 or more, reject the message and set `retry_after` to (oldest message time + 10 s − now).
 - **Visible history:** the room's messages where `removed_at` is null and `created_at` is within 7 days. Take the newest 20 and return them oldest first.
-- **Count events:** join, leave, and heartbeat recompute the room's count inside their transaction and compare it with `room_presence_counts`. Only a changed count is stored there and broadcast, after the transaction commits.
+- **Count events:** join, leave, and heartbeat recompute the room's count inside their transaction and compare it with `room_presence_counts`. Only a changed count is stored there. A revision reserved under the room lock is notified only after commit; requests never wait for publication. One lifespan-owned async worker coalesces pending counts to the latest committed value per room, including zero, rejects late older notifications, and publishes the two events in §7.3 outside database locks. Queued state is at most one value per room and one in-flight delivery, rather than one waiting publisher per request. Each channel's failures are handled independently; clients recover missed events through REST. Shutdown drains for up to five seconds, then cancels async I/O and closes the owned client.
 - **Presence sweeper:** a background task in FastAPI runs every 10 seconds. It recomputes each active room's count the same way, so members who just went past the 30-second presence timeout produce one count event. The backend runs as a single instance, so one sweeper is enough.
 
 ## 6. Identity and security
@@ -512,6 +512,7 @@ Every number in this document is defined in exactly one place: a backend setting
 | `HISTORY_LIMIT` / `MESSAGE_RETENTION_DAYS` | 20 messages / 7 days | C3 |
 | `BLOCK_DURATION_OPTIONS_MINUTES` | 15, 60, 1440 | E3 |
 | `SWEEPER_INTERVAL_SECONDS` | 10 | A2 |
+| Presence publisher shutdown grace (backend constant) | 5 seconds | A2, #91 |
 | Admin reports refresh (frontend constant) | 30 seconds | E2 |
 | "Near you" radius / accuracy cutoff / GPS timeout (frontend constants) | 500 m / 1 km / 10 s | A3 |
 | Anonymous sign-ins per IP (Supabase dashboard) | 300 per hour | B1 |

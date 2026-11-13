@@ -5,6 +5,7 @@ The fixture creates and drops its own database; it never reads the application's
 Only auth.users' UUID key is stubbed: full Supabase Auth remains a live smoke check.
 """
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Event
@@ -12,6 +13,7 @@ from time import monotonic, sleep
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine, event, inspect, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
@@ -566,13 +568,16 @@ def sweep(engine: Engine, room_id: UUID, session_id: UUID) -> None:
 
 
 def test_count_events_see_committed_data_and_released_room_lock(
-    pg_engine: Engine, pg_room: UUID, monkeypatch: pytest.MonkeyPatch
+    pg_engine: Engine,
+    pg_room: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+    publisher_client: TestClient,
 ) -> None:
     user_id = new_user(pg_engine)
     monkeypatch.setattr(service, "utc_now", lambda: NOW)
     events = []
 
-    def record(topic, event, payload):
+    async def record(_client, topic, event, payload):
         with Session(pg_engine) as db:
             # This connection must be able to take the lock while publishing is in
             # progress, and see the membership and snapshot committed together.
@@ -585,12 +590,16 @@ def test_count_events_see_committed_data_and_released_room_lock(
             assert db.get(RoomPresenceCount, pg_room).participant_count == count
             assert payload["count"] == count
         events.append((topic, event, payload))
+        return True
 
     monkeypatch.setattr(presence, "publish", record)
     join(pg_engine, pg_room, user_id)
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
     join(pg_engine, pg_room, user_id)
     heartbeat(pg_engine, pg_room, user_id)
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
     leave(pg_engine, pg_room, user_id)
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
     assert events == [
         (f"room:{pg_room}", "presence.updated", {"count": 1}),
         ("rooms", "room.count", {"room_id": str(pg_room), "count": 1}),
@@ -607,14 +616,21 @@ def test_sweeper_serializes_with_membership_activity(
     monkeypatch: pytest.MonkeyPatch,
     operation: str,
     sweep_first: bool,
+    publisher_client: TestClient,
 ) -> None:
     user_id = new_user(pg_engine)
     clock = [NOW]
     monkeypatch.setattr(service, "utc_now", lambda: clock[0])
     join(pg_engine, pg_room, user_id)
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
     clock[0] += timedelta(seconds=31)
     events = []
-    monkeypatch.setattr(presence, "publish", lambda *event: events.append(event))
+
+    async def record(_client, *event):
+        events.append(event)
+        return True
+
+    monkeypatch.setattr(presence, "publish", record)
     writing, release = Event(), Event()
     original = repository.refresh_presence_count
 
@@ -642,17 +658,21 @@ def test_sweeper_serializes_with_membership_activity(
         first.result(timeout=5)
         second.result(timeout=5)
 
-    expected = [0] if operation in {"leave", "sweep"} else ([0, 1] if sweep_first else [])
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
+
+    allowed = [[0]] if operation in {"leave", "sweep"} else ([[], [0, 1]] if sweep_first else [[]])
     for topic, event_name in ((f"room:{pg_room}", "presence.updated"), ("rooms", "room.count")):
         payloads = [
             payload for channel, name, payload in events if (channel, name) == (topic, event_name)
         ]
-        assert sorted(payload["count"] for payload in payloads) == expected
+        observed = [payload["count"] for payload in payloads]
+        assert observed in allowed
+        assert ([1] + observed)[-1] == (0 if operation in {"leave", "sweep"} else 1)
         for payload in payloads:
             assert set(payload) == (
                 {"count"} if event_name == "presence.updated" else {"room_id", "count"}
             )
-    assert len(events) == 2 * len(expected)
+    assert len(events) == 2 * len(observed)
     with Session(pg_engine) as db:
         count = repository.participant_count(db, pg_room, service.presence_since(clock[0]))
         assert count == (0 if operation in {"leave", "sweep"} else 1)
@@ -664,6 +684,7 @@ def test_sweeper_serializes_with_membership_activity(
     # A fresh session must not repeat any timeout consumed by either transaction.
     events.clear()
     sweep(pg_engine, pg_room, user_id)
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
     assert events == []
 
 
@@ -723,6 +744,7 @@ def test_slow_publisher_preserves_order_without_holding_database_locks(
     pg_room: UUID,
     monkeypatch: pytest.MonkeyPatch,
     fail_first_publish: bool,
+    publisher_client: TestClient,
 ) -> None:
     users = [new_user(pg_engine) for _ in range(3)]
     with pg_engine.begin() as connection:
@@ -734,16 +756,18 @@ def test_slow_publisher_preserves_order_without_holding_database_locks(
             {"name": str(uuid4())},
         )
     monkeypatch.setattr(service, "utc_now", lambda: NOW)
-    publishing, release, second_committed = Event(), Event(), Event()
+    publishing, second_committed = Event(), Event()
+    release = publisher_client.portal.call(asyncio.Event)
     events = []
 
-    def record(topic, name, payload):
+    async def record(_client, topic, name, payload):
         if topic == f"room:{pg_room}" and payload["count"] == 1:
             publishing.set()
-            assert release.wait(10), "Test did not release the first publisher"
+            await release.wait()
             if fail_first_publish:
                 raise RuntimeError("test first-channel failure")
         events.append((topic, name, payload))
+        return True
 
     def second_join():
         with Session(pg_engine) as db:
@@ -755,9 +779,10 @@ def test_slow_publisher_preserves_order_without_holding_database_locks(
         first = executor.submit(join, pg_engine, pg_room, users[0])
         try:
             assert publishing.wait(5)
+            assert first.result(timeout=2).nickname
             second = executor.submit(second_join)
             assert second_committed.wait(5), "A slow publisher blocked the next transaction"
-            assert not second.done()
+            assert second.result(timeout=2).nickname
             other = executor.submit(join, pg_engine, other_room, users[2])
             assert other.result(timeout=5).nickname
             with Session(pg_engine) as db:
@@ -769,9 +794,10 @@ def test_slow_publisher_preserves_order_without_holding_database_locks(
                 assert db.get(RoomPresenceCount, pg_room).participant_count == 2
                 assert repository.participant_count(db, pg_room, service.presence_since(NOW)) == 2
         finally:
-            release.set()
+            publisher_client.portal.call(release.set)
         assert first.result(timeout=5).nickname
         assert second.result(timeout=5).nickname
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
     events = [
         item
         for item in events
@@ -784,3 +810,81 @@ def test_slow_publisher_preserves_order_without_holding_database_locks(
         ("rooms", "room.count", {"room_id": str(pg_room), "count": 2}),
     ]
     assert events == (expected[1:] if fail_first_publish else expected)
+
+
+@pytest.mark.parametrize("newer_operation", ["join", "leave"])
+def test_delayed_post_commit_notification_cannot_overwrite_newer_committed_state(
+    pg_engine: Engine, pg_room: UUID, monkeypatch, publisher_client: TestClient, newer_operation
+) -> None:
+    users = [new_user(pg_engine) for _ in range(2)]
+    delayed, release = Event(), Event()
+    sent = []
+    original = presence.PendingCount.notify_committed
+
+    def notify(update):
+        if update.room_id == pg_room and update.count == 1 and not delayed.is_set():
+            delayed.set()
+            assert release.wait(10), "Test did not release the older committed notification"
+        original(update)
+
+    async def record(_client, topic, event_name, payload):
+        sent.append((topic, event_name, payload))
+        return True
+
+    monkeypatch.setattr(presence.PendingCount, "notify_committed", notify)
+    monkeypatch.setattr(presence, "publish", record)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(join, pg_engine, pg_room, users[0])
+        try:
+            assert delayed.wait(5)
+            if newer_operation == "join":
+                executor.submit(join, pg_engine, pg_room, users[1]).result(timeout=2)
+                final_count = 2
+            else:
+                executor.submit(leave, pg_engine, pg_room, users[0]).result(timeout=2)
+                final_count = 0
+            worker = publisher_client.app.state.presence_publisher
+            publisher_client.portal.call(worker.wait_idle)
+            expected = [
+                (f"room:{pg_room}", "presence.updated", {"count": final_count}),
+                ("rooms", "room.count", {"room_id": str(pg_room), "count": final_count}),
+            ]
+            assert sent == expected
+        finally:
+            release.set()
+        first.result(timeout=2)
+    publisher_client.portal.call(worker.wait_idle)
+    assert sent == expected
+
+
+def test_fifty_joins_finish_before_blocked_publisher_is_released(
+    pg_engine: Engine, pg_room: UUID, monkeypatch, publisher_client: TestClient
+) -> None:
+    users = [new_user(pg_engine) for _ in range(50)]
+    started = Event()
+    release = publisher_client.portal.call(asyncio.Event)
+    sent = []
+
+    async def blocked(_client, topic, event_name, payload):
+        started.set()
+        await release.wait()
+        sent.append((topic, event_name, payload))
+        return True
+
+    monkeypatch.setattr(presence, "publish", blocked)
+    with ThreadPoolExecutor(max_workers=50) as executor:
+        requests = [executor.submit(join, pg_engine, pg_room, user) for user in users]
+        try:
+            assert started.wait(5)
+            results = [request.result(timeout=5) for request in requests]
+            assert len({result.nickname for result in results}) == 50
+            assert not release.is_set()
+            worker = publisher_client.app.state.presence_publisher
+            assert len(worker._pending) <= 1
+        finally:
+            publisher_client.portal.call(release.set)
+    publisher_client.portal.call(worker.wait_idle)
+    assert sent[-2:] == [
+        (f"room:{pg_room}", "presence.updated", {"count": 50}),
+        ("rooms", "room.count", {"room_id": str(pg_room), "count": 50}),
+    ]

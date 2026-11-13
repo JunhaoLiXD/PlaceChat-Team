@@ -20,11 +20,22 @@ def client() -> TestClient:
     return TestClient(create_app())
 
 
+@pytest.fixture
+def publisher_client() -> Iterator[TestClient]:
+    """A real publisher lifespan; DB sweeps and real transports remain guarded."""
+    with TestClient(create_app()) as client:
+        yield client
+
+
 @pytest.fixture(autouse=True)
 def no_background_presence_io(monkeypatch: pytest.MonkeyPatch) -> None:
     """Request tests must never start a database sweep using a developer's .env."""
     monkeypatch.setattr(sweeper, "sweep_presence", lambda: None)
-    monkeypatch.setattr(presence, "publish", lambda *args: None)
+
+    async def no_publish(*args):
+        return True
+
+    monkeypatch.setattr(presence, "publish", no_publish)
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +47,11 @@ def no_real_broadcasts(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
     client = httpx.Client(transport=httpx.MockTransport(refuse))
     monkeypatch.setattr(realtime, "get_http_client", lambda: client)
+    monkeypatch.setattr(
+        presence,
+        "create_async_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(refuse)),
+    )
     yield
     client.close()
 
