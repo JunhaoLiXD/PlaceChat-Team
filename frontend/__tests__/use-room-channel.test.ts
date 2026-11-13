@@ -12,6 +12,7 @@ const fake = vi.hoisted(() => {
     topic: string;
     options: unknown;
     broadcast?: BroadcastHandler;
+    removed?: BroadcastHandler;
     status?: StatusHandler;
   }[] = [];
   const client = {
@@ -51,7 +52,14 @@ beforeEach(() => {
     fake.channels.push(record);
     const channel = {
       on: (_type: string, _filter: unknown, handler: BroadcastHandler) => {
-        record.broadcast = handler;
+        if (
+          _filter &&
+          (_filter as { event?: string }).event === "message.removed"
+        ) {
+          record.removed = handler;
+        } else {
+          record.broadcast = handler;
+        }
         return channel;
       },
       subscribe: (handler: StatusHandler) => {
@@ -63,10 +71,17 @@ beforeEach(() => {
   });
 });
 
-async function connected(roomId = "room-1", onMessage = vi.fn()) {
-  const hook = renderHook(({ id }) => useRoomChannel(id, onMessage), {
-    initialProps: { id: roomId },
-  });
+async function connected(
+  roomId = "room-1",
+  onMessage = vi.fn(),
+  onMessageRemoved = vi.fn(),
+) {
+  const hook = renderHook(
+    ({ id }) => useRoomChannel(id, onMessage, onMessageRemoved),
+    {
+      initialProps: { id: roomId },
+    },
+  );
   await waitFor(() => expect(fake.channels).toHaveLength(1));
   return { hook, onMessage, channel: fake.channels[0] };
 }
@@ -103,6 +118,16 @@ describe("useRoomChannel", () => {
     act(() => channel.broadcast?.({ payload: message("room-2") }));
 
     expect(onMessage).toHaveBeenCalledExactlyOnceWith(message("room-1"));
+  });
+
+  test("passes removed message ids to the removal callback", async () => {
+    const onMessageRemoved = vi.fn();
+    const { channel } = await connected("room-1", vi.fn(), onMessageRemoved);
+
+    act(() => channel.removed?.({ payload: { id: "m1" } }));
+    act(() => channel.removed?.({ payload: { id: 42 } }));
+
+    expect(onMessageRemoved).toHaveBeenCalledExactlyOnceWith("m1");
   });
 
   test("leaves the old channel when the room changes or the page closes", async () => {
