@@ -1,5 +1,6 @@
 """Data access for messages. Owner: Junhao — PBI-14 (#18)."""
 
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import and_, or_, select
@@ -17,6 +18,7 @@ def get_recent_messages(
     room_id: UUID,
     limit: int,
     *,
+    created_after: datetime | None = None,
     after: Message | None = None,
 ) -> list[Message]:
     """Return visible messages in chronological order, capped after newest selection."""
@@ -24,6 +26,8 @@ def get_recent_messages(
         Message.room_id == room_id,
         Message.removed_at.is_(None),
     )
+    if created_after is not None:
+        query = query.where(Message.created_at >= created_after)
     if after is not None:
         query = query.where(
             or_(

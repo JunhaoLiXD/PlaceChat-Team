@@ -5,7 +5,7 @@
 their contracts (§3.4); some are still stubs.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session as DbSession
@@ -68,8 +68,15 @@ def get_message_history(
     ensure_member(db, session_id, str(room_id))
 
     after = repository.get_message(db, room_id, after_id) if after_id is not None else None
+    visible_since = datetime.now(UTC) - timedelta(
+        days=get_settings().message_retention_days
+    )
     messages = repository.get_recent_messages(
-        db, room_id, get_settings().history_limit, after=after
+        db,
+        room_id,
+        get_settings().history_limit,
+        created_after=visible_since,
+        after=after,
     )
     caller_id = UUID(session_id)
     return [

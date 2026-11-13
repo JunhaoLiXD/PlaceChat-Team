@@ -122,6 +122,49 @@ def test_history_after_returns_only_newer_messages(
     assert [item["id"] for item in response.json()] == [str(messages[1].id), str(messages[2].id)]
 
 
+def test_history_hides_expired_messages(
+    client: TestClient, db: Session, room: Room
+) -> None:
+    now = datetime.now(UTC)
+    visible = add_message(db, room.id, now - timedelta(days=6), False)
+    expired = add_message(db, room.id, now - timedelta(days=8), False)
+    db.commit()
+
+    response = client.get(f"/api/v1/rooms/{room.id}/messages")
+
+    assert [item["id"] for item in response.json()] == [str(visible.id)]
+    assert str(expired.id) not in [item["id"] for item in response.json()]
+
+
+def test_history_hides_removed_messages(
+    client: TestClient, db: Session, room: Room
+) -> None:
+    visible = add_message(db, room.id, datetime.now(UTC), False)
+    removed = add_message(db, room.id, datetime.now(UTC), False)
+    removed.removed_at = datetime.now(UTC)
+    db.commit()
+
+    response = client.get(f"/api/v1/rooms/{room.id}/messages")
+
+    assert [item["id"] for item in response.json()] == [str(visible.id)]
+    assert str(removed.id) not in [item["id"] for item in response.json()]
+
+
+def test_history_after_skips_removed_messages(
+    client: TestClient, db: Session, room: Room
+) -> None:
+    now = datetime.now(UTC)
+    cursor = add_message(db, room.id, now, False)
+    removed = add_message(db, room.id, now + timedelta(seconds=1), False)
+    removed.removed_at = now + timedelta(seconds=2)
+    visible = add_message(db, room.id, now + timedelta(seconds=3), False)
+    db.commit()
+
+    response = client.get(f"/api/v1/rooms/{room.id}/messages?after={cursor.id}")
+
+    assert [item["id"] for item in response.json()] == [str(visible.id)]
+
+
 def test_history_requires_membership(db: Session, room: Room) -> None:
     app = create_app()
     app.dependency_overrides[get_db] = lambda: db
