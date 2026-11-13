@@ -92,7 +92,11 @@ class CountPublisher:
             try:
                 if await publish(client, topic, event, payload):
                     self._delivered[key] = count
+                else:
+                    # Subscribers may have received it even if acknowledgement failed.
+                    self._delivered.pop(key, None)
             except Exception:
+                self._delivered.pop(key, None)
                 # A failure on one channel must not skip the other, or kill the worker.
                 logger.exception("Participant count publish failed for %s %s", topic, event)
 

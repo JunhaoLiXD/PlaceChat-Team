@@ -1,11 +1,15 @@
 """Deterministic mailbox, ordering, failure, and lifespan checks; no live transport."""
 
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
+import httpx
 import pytest
 
+from app.core import realtime
+from app.core.config import Settings
 from app.main import create_app
 from app.modules.rooms import presence
 
@@ -50,6 +54,91 @@ def test_blocked_delivery_coalesces_to_final_zero_with_one_worker(monkeypatch):
             assert sent == events(room, 1, 0)
         assert worker.task.done()
         assert not worker._pending
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failed_event", ["presence.updated", "room.count"])
+@pytest.mark.parametrize("failure", ["false", "exception"])
+@pytest.mark.parametrize("correction", [1, 2])
+def test_uncertain_delivery_invalidates_only_affected_channel(
+    monkeypatch, failed_event, failure, correction
+):
+    async def scenario():
+        room, other_room = uuid4(), uuid4()
+        received = []
+        failed = False
+        settings = Settings(
+            _env_file=None,
+            supabase_url="https://test.supabase.co",
+            supabase_secret_key="sb_secret_test",
+        )
+
+        def deliver(request):
+            nonlocal failed
+            topic, event = request.url.path.split("/broadcast/", 1)[1].split("/events/")
+            payload = json.loads(request.content)
+            received.append((topic, event, payload))
+            # Subscribers receive the count before its acknowledgement is lost.
+            if event == failed_event and payload["count"] == 2 and not failed:
+                failed = True
+                raise httpx.ReadTimeout("response lost after delivery", request=request)
+            return httpx.Response(202)
+
+        async def publish(client, topic, event, payload):
+            success = await realtime.publish_async(client, topic, event, payload)
+            if not success and failure == "exception":
+                raise RuntimeError("publish raised after delivery")
+            return success
+
+        monkeypatch.setattr(realtime, "get_settings", lambda: settings)
+        monkeypatch.setattr(presence, "publish", publish)
+        monkeypatch.setattr(
+            presence,
+            "create_async_client",
+            lambda: httpx.AsyncClient(transport=httpx.MockTransport(deliver)),
+        )
+        async with presence.publisher_lifespan() as worker:
+            worker.reserve(room, 1).notify_committed()
+            other = worker.reserve(other_room, 7)
+            other.notify_committed()
+            await asyncio.wait_for(worker.wait_idle(), 1)
+            stale = worker.reserve(room, 0)
+            uncertain = worker.reserve(room, 2)
+            uncertain.notify_committed()
+            await asyncio.wait_for(worker.wait_idle(), 1)
+            expected = events(room, 1) + events(other_room, 7) + events(room, 2)
+            assert received == expected
+            confirmed = {
+                (other_room, "presence.updated"): 7,
+                (other_room, "room.count"): 7,
+                (
+                    room,
+                    "room.count" if failed_event == "presence.updated" else "presence.updated",
+                ): 2,
+            }
+            after_failure = worker._delivered.copy()
+            assert worker._latest == {room: uncertain.revision, other_room: other.revision}
+            stale.notify_committed()
+            await asyncio.wait_for(worker.wait_idle(), 1)
+            assert received == expected
+
+            worker.reserve(room, correction).notify_committed()
+            await asyncio.wait_for(worker.wait_idle(), 1)
+            # Returning to 1 must correct subscribers; retrying 2 must deduplicate
+            # the channel whose acknowledgement succeeded.
+            expected += [
+                item
+                for item in events(room, correction)
+                if correction == 1 or item[1] == failed_event
+            ]
+            assert received == expected
+            assert after_failure == confirmed
+            assert worker._delivered[(room, failed_event)] == correction
+            worker.reserve(room, correction).notify_committed()
+            worker.reserve(other_room, 7).notify_committed()
+            await asyncio.wait_for(worker.wait_idle(), 1)
+            assert received == expected
 
     asyncio.run(scenario())
 
