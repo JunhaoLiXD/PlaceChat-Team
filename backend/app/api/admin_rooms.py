@@ -17,6 +17,11 @@ router = APIRouter(prefix="/admin/rooms", tags=["admin"], dependencies=[Depends(
 Db = Annotated[Session, Depends(get_db)]
 
 
+@router.get("", response_model=list[AdminRoomResponse])
+def list_rooms(db: Db) -> list[AdminRoomResponse]:
+    return admin_service.list_rooms(db)
+
+
 @router.post("", response_model=AdminRoomResponse, status_code=201)
 def create_room(body: RoomCreate, db: Db) -> AdminRoomResponse:
     return admin_service.create_room(db, body)
