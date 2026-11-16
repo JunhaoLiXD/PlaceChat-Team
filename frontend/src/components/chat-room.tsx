@@ -255,8 +255,13 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     [room.participant_count],
   );
 
-  const channelStatus = useRoomChannel(mockMode ? null : room.id, (message) =>
-    setMessages((current) => mergeMessages(current, [message])),
+  const channelStatus = useRoomChannel(
+    mockMode ? null : room.id,
+    (message) => setMessages((current) => mergeMessages(current, [message])),
+    (messageId) =>
+      setMessages((current) =>
+        current.filter((message) => message.id !== messageId),
+      ),
   );
   const badge = CONNECTION_BADGES[mockMode ? "demo" : channelStatus];
   const banner = useConnectionBanner(channelStatus);
