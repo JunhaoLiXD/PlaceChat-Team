@@ -1,8 +1,11 @@
 """Membership queries run against SQLite; its advisory-lock shim does not test PG locking."""
 
-from collections.abc import Iterator
+import asyncio
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from unittest.mock import Mock
+from threading import Event
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -466,6 +469,7 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> list[datetime]:
 
 
 CountEvents = list[tuple[str, str, dict[str, str | int]]]
+PublishedCounts = Callable[[], CountEvents]
 
 
 def count_events(room_id: UUID, *values: int) -> CountEvents:
@@ -480,49 +484,96 @@ def count_events(room_id: UUID, *values: int) -> CountEvents:
 
 
 @pytest.fixture
-def published(db: Session, monkeypatch: pytest.MonkeyPatch) -> CountEvents:
+def published(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> PublishedCounts:
     events: CountEvents = []
 
-    def record(topic: str, event: str, payload: dict[str, str | int]) -> None:
-        assert not db.in_transaction(), "Count events must be published after commit"
+    async def record(_client, topic: str, event: str, payload: dict[str, str | int]) -> bool:
         events.append((topic, event, payload))
+        return True
 
     monkeypatch.setattr(presence, "publish", record)
-    return events
+
+    def delivered():
+        client.portal.call(client.app.state.presence_publisher.wait_idle)
+        return events
+
+    return delivered
 
 
 def test_join_and_leave_publish_exact_counts(
-    client: TestClient, room_id: UUID, published: CountEvents, clock: list[datetime]
+    client: TestClient, room_id: UUID, published: PublishedCounts, clock: list[datetime]
 ) -> None:
     path = f"/api/v1/rooms/{room_id}"
     assert client.post(f"{path}/join").status_code == 200
+    assert published() == count_events(room_id, 1)
     other_user = uuid4()
     client.app.dependency_overrides[get_current_session] = lambda: Identity(str(other_user), True)
     assert client.post(f"{path}/join").status_code == 200
+    assert published() == count_events(room_id, 1, 2)
     assert client.post(f"{path}/leave").json() == {"status": "ok"}
+    assert published() == count_events(room_id, 1, 2, 1)
     client.app.dependency_overrides[get_current_session] = lambda: Identity(str(SESSION_ID), True)
     assert client.post(f"{path}/leave").json() == {"status": "ok"}
-    assert published == count_events(room_id, 1, 2, 1, 0)
+    assert published() == count_events(room_id, 1, 2, 1, 0)
+
+
+def test_requests_and_sweeps_finish_while_count_publication_is_blocked(
+    client: TestClient, db: Session, room_id: UUID, clock, monkeypatch
+) -> None:
+    started = Event()
+    release = client.portal.call(asyncio.Event)
+    sent = []
+
+    async def stalled(_client, topic, event, payload):
+        started.set()
+        await release.wait()
+        sent.append((topic, event, payload))
+        return True
+
+    monkeypatch.setattr(presence, "publish", stalled)
+    path = f"/api/v1/rooms/{room_id}"
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(client.post, f"{path}/join")
+        try:
+            assert started.wait(2)
+            assert first.result(timeout=2).status_code == 200
+            assert client.get("/health").status_code == 200
+            clock[0] += timedelta(seconds=31)
+            service.sweep_room_presence(db, room_id)
+            for endpoint in ("heartbeat", "leave", "join", "leave"):
+                response = executor.submit(client.post, f"{path}/{endpoint}").result(timeout=2)
+                assert response.status_code == 200
+            worker = client.app.state.presence_publisher
+            assert len(worker._pending) == 1
+            assert not release.is_set()
+        finally:
+            client.portal.call(release.set)
+    client.portal.call(worker.wait_idle)
+    assert sent == count_events(room_id, 1, 0)
 
 
 def test_unchanged_and_failed_operations_do_not_publish(
-    client: TestClient, db: Session, room_id: UUID, published: CountEvents, clock: list[datetime]
+    client: TestClient,
+    db: Session,
+    room_id: UUID,
+    published: PublishedCounts,
+    clock: list[datetime],
 ) -> None:
     path = f"/api/v1/rooms/{room_id}"
     assert client.post(f"{path}/join").status_code == 200
-    published.clear()
+    published().clear()
     assert client.post(f"{path}/join").status_code == 200
     clock[0] += timedelta(seconds=30)
     assert client.post(f"{path}/heartbeat").status_code == 200
     service.sweep_room_presence(db, room_id)
-    assert published == []
+    assert published() == []
     assert client.post(f"{path}/leave").status_code == 200
-    published.clear()
+    published().clear()
     assert client.post(f"{path}/leave").status_code == 403
     assert client.post(f"{path}/heartbeat").status_code == 403
     assert client.post(f"/api/v1/rooms/{uuid4()}/join").status_code == 404
     service.sweep_room_presence(db, room_id)
-    assert published == []
+    assert published() == []
 
 
 @pytest.mark.parametrize("timeout", [10, 30])
@@ -530,7 +581,7 @@ def test_sweeps_include_exact_boundary_and_expire_once(
     client: TestClient,
     db: Session,
     room_id: UUID,
-    published: CountEvents,
+    published: PublishedCounts,
     clock: list[datetime],
     monkeypatch: pytest.MonkeyPatch,
     timeout: int,
@@ -539,19 +590,19 @@ def test_sweeps_include_exact_boundary_and_expire_once(
         service, "get_settings", lambda: Settings(_env_file=None, presence_timeout_seconds=timeout)
     )
     assert client.post(f"/api/v1/rooms/{room_id}/join").status_code == 200
-    published.clear()
+    published().clear()
     for seconds in (timeout - 0.000001, timeout):
         clock[0] = NOW + timedelta(seconds=seconds)
         service.sweep_room_presence(db, room_id)
         assert counts(client, db)[str(room_id)] == 1
-        assert published == []
+        assert published() == []
     clock[0] += timedelta(microseconds=1)
     service.sweep_room_presence(db, room_id)
-    assert published == count_events(room_id, 0)
+    assert published() == count_events(room_id, 0)
     for seconds in (timeout + 1, 60, 120):
         clock[0] = NOW + timedelta(seconds=seconds)
         service.sweep_room_presence(db, room_id)
-    assert published == count_events(room_id, 0)
+    assert published() == count_events(room_id, 0)
     assert counts(client, db)[str(room_id)] == 0
     assert service.ensure_member(db, str(SESSION_ID), str(room_id)).nickname
 
@@ -561,7 +612,7 @@ def test_returning_member_restores_count_without_duplicates(
     client: TestClient,
     db: Session,
     room_id: UUID,
-    published: CountEvents,
+    published: PublishedCounts,
     clock: list[datetime],
     endpoint: str,
 ) -> None:
@@ -572,14 +623,14 @@ def test_returning_member_restores_count_without_duplicates(
     client.app.dependency_overrides[get_current_session] = lambda: Identity(str(other_user), True)
     assert client.post(f"{path}/join").status_code == 200
     clock[0] = NOW + timedelta(seconds=31)
-    published.clear()
+    published().clear()
     service.sweep_room_presence(db, room_id)
-    assert published == count_events(room_id, 1)
+    assert published() == count_events(room_id, 1)
     client.app.dependency_overrides[get_current_session] = lambda: Identity(str(SESSION_ID), True)
     assert client.post(f"{path}/{endpoint}").status_code == 200
     assert client.post(f"{path}/{endpoint}").status_code == 200
     service.sweep_room_presence(db, room_id)
-    assert published == count_events(room_id, 1, 2)
+    assert published() == count_events(room_id, 1, 2)
     assert counts(client, db)[str(room_id)] == 2
     member = db.get(RoomMember, (room_id, SESSION_ID))
     assert member.nickname == nickname
@@ -592,26 +643,26 @@ def test_presence_refresh_before_sweep_does_not_duplicate_count(
     client: TestClient,
     db: Session,
     room_id: UUID,
-    published: CountEvents,
+    published: PublishedCounts,
     clock: list[datetime],
     returning: bool,
 ) -> None:
     assert client.post(f"/api/v1/rooms/{room_id}/join").status_code == 200
-    published.clear()
+    published().clear()
     clock[0] += timedelta(seconds=31)
     if not returning:
         client.app.dependency_overrides[get_current_session] = lambda: Identity(str(uuid4()), True)
     assert client.post(f"/api/v1/rooms/{room_id}/join").status_code == 200
     service.sweep_room_presence(db, room_id)
     assert counts(client, db)[str(room_id)] == 1
-    assert published == []
+    assert published() == []
 
 
 def test_timeout_preserves_nickname_reservation_and_joined_membership(
     client: TestClient,
     db: Session,
     room_id: UUID,
-    published: CountEvents,
+    published: PublishedCounts,
     clock: list[datetime],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -622,8 +673,10 @@ def test_timeout_preserves_nickname_reservation_and_joined_membership(
     )
     path = f"/api/v1/rooms/{room_id}"
     assert client.post(f"{path}/join").json()["nickname"] == "Quiet Otter"
+    assert published() == count_events(room_id, 1)
     clock[0] += timedelta(seconds=31)
     service.sweep_room_presence(db, room_id)
+    assert published() == count_events(room_id, 1, 0)
     membership = service.ensure_member(db, str(SESSION_ID), str(room_id))
     assert membership.nickname == "Quiet Otter"
     member = db.get(RoomMember, (room_id, SESSION_ID))
@@ -634,23 +687,28 @@ def test_timeout_preserves_nickname_reservation_and_joined_membership(
     other_user = uuid4()
     client.app.dependency_overrides[get_current_session] = lambda: Identity(str(other_user), True)
     assert client.post(f"{path}/join").json()["nickname"] == "Calm Fox"
+    assert published() == count_events(room_id, 1, 0, 1)
     clock[0] = NOW + timedelta(seconds=60)
     client.app.dependency_overrides[get_current_session] = lambda: Identity(str(SESSION_ID), True)
     assert client.post(f"{path}/join").json()["nickname"] == "Quiet Otter"
-    assert published == count_events(room_id, 1, 0, 1, 2)
+    assert published() == count_events(room_id, 1, 0, 1, 2)
 
 
 def test_leave_after_timeout_does_not_publish_again(
-    client: TestClient, db: Session, room_id: UUID, published: CountEvents, clock: list[datetime]
+    client: TestClient,
+    db: Session,
+    room_id: UUID,
+    published: PublishedCounts,
+    clock: list[datetime],
 ) -> None:
     path = f"/api/v1/rooms/{room_id}"
     assert client.post(f"{path}/join").status_code == 200
     clock[0] += timedelta(seconds=31)
     service.sweep_room_presence(db, room_id)
-    published.clear()
+    published().clear()
     assert client.post(f"{path}/leave").status_code == 200
     service.sweep_room_presence(db, room_id)
-    assert published == []
+    assert published() == []
     assert db.get(RoomMember, (room_id, SESSION_ID)).left_at is not None
 
 
@@ -676,12 +734,14 @@ def test_publish_failures_leave_changes_committed(
         assert not db.in_transaction()
         raise RuntimeError("test transport failure")
 
-    publisher = Mock(side_effect=fail)
+    client.portal.call(client.app.state.presence_publisher.wait_idle)
+    publisher = AsyncMock(side_effect=fail)
     monkeypatch.setattr(presence, "publish", publisher)
     if operation == "sweep":
         service.sweep_room_presence(db, room_id)
     else:
         assert client.post(f"{path}/{operation}").status_code == 200
+    client.portal.call(client.app.state.presence_publisher.wait_idle)
     assert publisher.call_count == 2
     assert "Participant count publish failed" in caplog.text
     assert not db.in_transaction()
@@ -697,12 +757,12 @@ def test_failed_observation_rolls_back_and_next_sweep_retries(
     client: TestClient,
     db: Session,
     room_id: UUID,
-    published: CountEvents,
+    published: PublishedCounts,
     clock: list[datetime],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert client.post(f"/api/v1/rooms/{room_id}/join").status_code == 200
-    published.clear()
+    published().clear()
     clock[0] += timedelta(seconds=31)
     original = repository.refresh_presence_count
 
@@ -714,17 +774,17 @@ def test_failed_observation_rolls_back_and_next_sweep_retries(
     with pytest.raises(RuntimeError, match="observation failure"):
         service.sweep_room_presence(db, room_id)
     assert not db.in_transaction()
-    assert published == []
+    assert published() == []
     assert db.get(RoomPresenceCount, room_id).participant_count == 1
     assert db.get(RoomMember, (room_id, SESSION_ID)).left_at is None
     db.rollback()
     monkeypatch.setattr(repository, "refresh_presence_count", original)
     service.sweep_room_presence(db, room_id)
-    assert published == count_events(room_id, 0)
+    assert published() == count_events(room_id, 0)
 
 
 def test_first_sweep_finds_old_members_and_ignores_archived_rooms(
-    db: Session, room_id: UUID, published: CountEvents, clock: list[datetime]
+    db: Session, room_id: UUID, published: PublishedCounts, clock: list[datetime]
 ) -> None:
     add_member(db, room_id, age=31)
     archived = add_room(db, "archived")
@@ -732,11 +792,11 @@ def test_first_sweep_finds_old_members_and_ignores_archived_rooms(
     empty = add_room(db)
     for target in (room_id, archived, empty, uuid4()):
         service.sweep_room_presence(db, target)
-    assert published == count_events(room_id, 0)
+    assert published() == count_events(room_id, 0)
     # A new session (like a restarted worker) must not repeat an observed timeout.
     with Session(db.get_bind()) as fresh:
         service.sweep_room_presence(fresh, room_id)
-    assert published == count_events(room_id, 0)
+    assert published() == count_events(room_id, 0)
 
 
 @pytest.mark.parametrize("endpoint", ["join", "leave", "heartbeat"])
@@ -744,7 +804,7 @@ def test_commit_failure_never_publishes_membership_or_count_changes(
     client: TestClient,
     db: Session,
     room_id: UUID,
-    published: CountEvents,
+    published: PublishedCounts,
     clock: list[datetime],
     endpoint: str,
 ) -> None:
@@ -754,7 +814,7 @@ def test_commit_failure_never_publishes_membership_or_count_changes(
     if endpoint == "heartbeat":
         clock[0] += timedelta(seconds=31)
         service.sweep_room_presence(db, room_id)
-    published.clear()
+    published().clear()
 
     def fail_commit(session):
         raise RuntimeError("test commit failure")
@@ -766,7 +826,7 @@ def test_commit_failure_never_publishes_membership_or_count_changes(
     finally:
         event.remove(db, "before_commit", fail_commit)
     assert not db.in_transaction()
-    assert published == []
+    assert published() == []
     member = db.get(RoomMember, (room_id, SESSION_ID))
     state = db.get(RoomPresenceCount, room_id)
     if endpoint == "join":
@@ -778,4 +838,4 @@ def test_commit_failure_never_publishes_membership_or_count_changes(
         assert state.participant_count == (0 if endpoint == "heartbeat" else 1)
     db.rollback()
     assert client.post(f"{path}/{endpoint}").status_code == 200
-    assert published == count_events(room_id, 0 if endpoint == "leave" else 1)
+    assert published() == count_events(room_id, 0 if endpoint == "leave" else 1)
