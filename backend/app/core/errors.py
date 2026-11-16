@@ -80,6 +80,12 @@ class AlreadyReported(AppError):
     message = "You already reported this message."
 
 
+class ReportNotFound(AppError):
+    status_code = 404
+    code = "REPORT_NOT_FOUND"
+    message = "This report does not exist or has already been handled."
+
+
 class ValidationFailed(AppError):
     status_code = 422
     code = "VALIDATION_FAILED"
