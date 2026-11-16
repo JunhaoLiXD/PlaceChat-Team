@@ -68,9 +68,7 @@ def get_message_history(
     ensure_member(db, session_id, str(room_id))
 
     after = repository.get_message(db, room_id, after_id) if after_id is not None else None
-    visible_since = datetime.now(UTC) - timedelta(
-        days=get_settings().message_retention_days
-    )
+    visible_since = datetime.now(UTC) - timedelta(days=get_settings().message_retention_days)
     messages = repository.get_recent_messages(
         db,
         room_id,
