@@ -16,13 +16,20 @@ export const RESTORED_BANNER_MS = 3_000;
  */
 export function useConnectionBanner(
   status: RoomChannelStatus,
+  roomId?: string,
 ): ConnectionBanner {
+  const [previousRoom, setPreviousRoom] = useState(roomId);
   const [previous, setPrevious] = useState(status);
   const [wasConnected, setWasConnected] = useState(status === "subscribed");
   const [banner, setBanner] = useState<ConnectionBanner>(null);
 
   // React's pattern for state that follows a changing prop: update during render.
-  if (status !== previous) {
+  if (roomId !== previousRoom) {
+    setPreviousRoom(roomId);
+    setPrevious(status);
+    setWasConnected(status === "subscribed");
+    setBanner(null);
+  } else if (status !== previous) {
     setPrevious(status);
     if (status === "subscribed") {
       setWasConnected(true);

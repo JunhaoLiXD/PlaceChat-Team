@@ -105,6 +105,57 @@ describe("useRoomChannel", () => {
     expect(onMessage).toHaveBeenCalledExactlyOnceWith(message("room-1"));
   });
 
+  test("ignores late message callbacks after cleanup", async () => {
+    const { hook, onMessage, channel } = await connected();
+    hook.unmount();
+    act(() => channel.broadcast?.({ payload: message("room-1") }));
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  test("reports statuses synchronously before batched live arrivals", async () => {
+    const received: string[] = [];
+    const hook = renderHook(() =>
+      useRoomChannel(
+        "room-1",
+        () => received.push("message"),
+        (status) => received.push(status),
+      ),
+    );
+    await waitFor(() => expect(fake.channels).toHaveLength(1));
+    act(() => {
+      fake.channels[0].status?.("CHANNEL_ERROR");
+      fake.channels[0].status?.("SUBSCRIBED");
+      fake.channels[0].broadcast?.({ payload: message("room-1") });
+    });
+    expect(received).toEqual(["error", "subscribed", "message"]);
+    hook.unmount();
+  });
+
+  test("uses the latest status and message callbacks without another channel", async () => {
+    const oldMessage = vi.fn(),
+      oldStatus = vi.fn();
+    const nextMessage = vi.fn(),
+      nextStatus = vi.fn();
+    const hook = renderHook(
+      ({ receive, status }) => useRoomChannel("room-1", receive, status),
+      {
+        initialProps: { receive: oldMessage, status: oldStatus },
+      },
+    );
+    await waitFor(() => expect(fake.channels).toHaveLength(1));
+    hook.rerender({ receive: nextMessage, status: nextStatus });
+    act(() => {
+      fake.channels[0].status?.("SUBSCRIBED");
+      fake.channels[0].broadcast?.({ payload: message("room-1") });
+    });
+    expect(nextStatus).toHaveBeenCalledExactlyOnceWith("subscribed");
+    expect(nextMessage).toHaveBeenCalledExactlyOnceWith(message("room-1"));
+    expect(oldStatus).not.toHaveBeenCalled();
+    expect(oldMessage).not.toHaveBeenCalled();
+    expect(fake.channels).toHaveLength(1);
+    hook.unmount();
+  });
+
   test("leaves the old channel when the room changes or the page closes", async () => {
     const { hook, channel } = await connected();
 

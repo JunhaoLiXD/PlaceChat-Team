@@ -136,3 +136,43 @@ test("a reader who scrolled up gets a new-message button", async () => {
     await screen.findByRole("button", { name: /1 new message/i }),
   ).toBeDefined();
 });
+
+test("missed messages inserted before an existing own message do not pull a reader down", async () => {
+  const first: ChatMessage = {
+    id: "first",
+    room_id: room.id,
+    nickname: "Calm Fox",
+    body: "First",
+    created_at: "2026-10-13T13:42:00-04:00",
+  };
+  const own = {
+    ...first,
+    id: "own",
+    body: "Mine",
+    created_at: "2026-10-13T13:44:00-04:00",
+  };
+  const missed = {
+    ...first,
+    id: "missed",
+    body: "Missed",
+    created_at: "2026-10-13T13:43:00-04:00",
+  };
+  const ids = new Set([own.id]);
+  const view = render(
+    <MessageFeed messages={[first, own]} ownMessageIds={ids} />,
+  );
+  const scrollRegion = screen.getByTestId("message-scroll-region");
+  Object.defineProperties(scrollRegion, {
+    clientHeight: { configurable: true, value: 200 },
+    scrollHeight: { configurable: true, value: 1000 },
+    scrollTop: { configurable: true, value: 100 },
+  });
+  fireEvent.scroll(scrollRegion);
+  view.rerender(
+    <MessageFeed messages={[first, missed, own]} ownMessageIds={ids} />,
+  );
+  expect(
+    await screen.findByRole("button", { name: /1 new message/i }),
+  ).toBeDefined();
+  expect(scrollRegion.scrollTop).toBe(100);
+});

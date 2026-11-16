@@ -31,15 +31,19 @@ const STATUS_BY_STATE: Record<string, RoomChannelStatus> = {
 export function useRoomChannel(
   roomId: string | null,
   onMessage: (message: ChatMessage) => void,
+  onStatus?: (status: RoomChannelStatus) => void,
 ): RoomChannelStatus {
   const [state, setState] = useState<{
     roomId: string | null;
     status: RoomChannelStatus;
   }>({ roomId, status: "connecting" });
   const onMessageRef = useRef(onMessage);
+  const onStatusRef = useRef(onStatus);
+  const removalRef = useRef<Promise<unknown> | undefined>(undefined);
 
   useEffect(() => {
     onMessageRef.current = onMessage;
+    onStatusRef.current = onStatus;
   });
 
   useEffect(() => {
@@ -47,13 +51,20 @@ export function useRoomChannel(
     let cancelled = false;
     let channel: RealtimeChannel | undefined;
     const report = (status: RoomChannelStatus) => {
-      if (!cancelled) setState({ roomId, status });
+      if (cancelled) return;
+      // Notify synchronously: live messages can follow SUBSCRIBED in the same
+      // React batch, before an effect watching the rendered status could run.
+      onStatusRef.current?.(status);
+      setState({ roomId, status });
     };
 
     async function connect() {
       try {
+        await removalRef.current;
+        if (cancelled) return;
         const supabase = getSupabaseBrowserClient();
         await ensureSession();
+        if (cancelled) return;
         // Load the user's token before joining; a private join without it is refused.
         await supabase.realtime.setAuth();
         if (cancelled) return;
@@ -63,7 +74,7 @@ export function useRoomChannel(
           .on("broadcast", { event: "message.created" }, ({ payload }) => {
             const message = payload as ChatMessage;
             // Only this room's messages, even if an event arrives on the wrong topic (#20).
-            if (message?.room_id !== roomId) return;
+            if (cancelled || message?.room_id !== roomId) return;
             onMessageRef.current(message);
           })
           .subscribe((channelState) => {
@@ -78,7 +89,13 @@ export function useRoomChannel(
 
     return () => {
       cancelled = true;
-      if (channel) void getSupabaseBrowserClient().removeChannel(channel);
+      if (channel) {
+        removalRef.current = getSupabaseBrowserClient()
+          .removeChannel(channel)
+          .catch(() => {
+            // Local callbacks are already disabled, even if unsubscribe fails.
+          });
+      }
     };
   }, [roomId]);
 
