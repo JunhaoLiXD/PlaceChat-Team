@@ -82,23 +82,48 @@ export async function listRooms(): Promise<RoomSummary[]> {
   });
 }
 
-export async function joinRoom(roomId: string): Promise<JoinRoomResult> {
-  if (shouldUseMocks()) {
-    const room = MOCK_ROOMS.find((candidate) => candidate.id === roomId);
-    if (!room) {
-      throw new ApiRequestError(
-        "This room does not exist or has been closed.",
-        404,
-        "ROOM_NOT_FOUND",
-      );
-    }
-    const { id, name, description } = room;
-    return { room: { id, name, description }, nickname: "Quiet Otter" };
-  }
+// Shared across component/Activity visits in this tab, as in PR #95. Finish an
+// earlier Leave before a later Join can establish the same room's membership.
+const membershipRequests = new Map<string, Promise<void>>();
 
-  return apiFetch<JoinRoomResult>(`/api/v1/rooms/${roomId}/join`, {
-    method: "POST",
-    auth: true,
+function queueMembershipChange<T>(
+  roomId: string,
+  change: () => Promise<T>,
+): Promise<T> {
+  const previous = membershipRequests.get(roomId) ?? Promise.resolve();
+  const request = previous.then(change);
+  // A failed cleanup must release the queue for the next visit too.
+  const settled = request.then(
+    () => undefined,
+    () => undefined,
+  );
+  membershipRequests.set(roomId, settled);
+  void settled.then(() => {
+    if (membershipRequests.get(roomId) === settled)
+      membershipRequests.delete(roomId);
+  });
+  return request;
+}
+
+export async function joinRoom(roomId: string): Promise<JoinRoomResult> {
+  return queueMembershipChange(roomId, async () => {
+    if (shouldUseMocks()) {
+      const room = MOCK_ROOMS.find((candidate) => candidate.id === roomId);
+      if (!room) {
+        throw new ApiRequestError(
+          "This room does not exist or has been closed.",
+          404,
+          "ROOM_NOT_FOUND",
+        );
+      }
+      const { id, name, description } = room;
+      return { room: { id, name, description }, nickname: "Quiet Otter" };
+    }
+
+    return apiFetch<JoinRoomResult>(`/api/v1/rooms/${roomId}/join`, {
+      method: "POST",
+      auth: true,
+    });
   });
 }
 
@@ -113,11 +138,13 @@ export async function heartbeatRoom(roomId: string): Promise<void> {
 
 /** Leave the room and free the nickname right away (B3). */
 export async function leaveRoom(roomId: string): Promise<void> {
-  if (shouldUseMocks()) return;
+  return queueMembershipChange(roomId, async () => {
+    if (shouldUseMocks()) return;
 
-  await apiFetch(`/api/v1/rooms/${roomId}/leave`, {
-    method: "POST",
-    auth: true,
+    await apiFetch(`/api/v1/rooms/${roomId}/leave`, {
+      method: "POST",
+      auth: true,
+    });
   });
 }
 

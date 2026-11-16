@@ -213,6 +213,171 @@ function leaves() {
   return fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/leave"));
 }
 
+test.each([
+  ["remount", "Leave"],
+  ["remount", "Back"],
+  ["Activity", "Leave"],
+  ["Activity", "Back"],
+])(
+  "regression: a delayed Leave cannot cancel membership after a quick return (%s, %s)",
+  async (mode, control) => {
+    const pendingLeave = deferred<void>();
+    const normalFetch = fetchMock.getMockImplementation()!;
+    let membershipActive = false;
+    let joinStarts = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/join")) {
+        joinStarts += 1;
+        membershipActive = true;
+      }
+      if (String(input).endsWith("/leave")) {
+        await pendingLeave.promise;
+        membershipActive = false;
+      }
+      return normalFetch(input, init);
+    });
+    const page = (visible: boolean) =>
+      mode === "Activity" ? (
+        <Activity mode={visible ? "visible" : "hidden"}>
+          <ChatRoom room={room} />
+        </Activity>
+      ) : visible ? (
+        <ChatRoom room={room} />
+      ) : null;
+    const view = render(page(true));
+    await settle();
+    await settle(() =>
+      fireEvent.click(
+        control === "Leave"
+          ? screen.getByRole("button", { name: "Leave" })
+          : screen.getByRole("link", { name: /all rooms/i }),
+      ),
+    );
+    const navigatedBeforeLeave = fake.push.mock.calls.length;
+    await settle(() => view.rerender(page(false)));
+    await settle(() => view.rerender(page(true)));
+    fireEvent.change(screen.getByLabelText("Message Library West"), {
+      target: { value: "queued draft" },
+    });
+    const disabledBeforeLeave = screen
+      .getByRole("button", { name: /send/i })
+      .hasAttribute("disabled");
+    await advance(15_000);
+    const heartbeatsBeforeLeave = heartbeats().length;
+    const joinsBeforeLeave = joinStarts;
+    await settle(() => pendingLeave.resolve());
+    expect(membershipActive).toBe(true);
+    expect(joinsBeforeLeave).toBe(1);
+    expect(joinStarts).toBe(2);
+    expect(navigatedBeforeLeave).toBe(1);
+    expect(disabledBeforeLeave).toBe(true);
+    expect(heartbeatsBeforeLeave).toBe(0);
+    expect(screen.getByText("Backend Otter")).toBeDefined();
+    await advance(15_000);
+    expect(heartbeats()).toHaveLength(1);
+  },
+);
+
+test.each(["network", "server"])(
+  "a failed old Leave releases the same-room queue (%s)",
+  async (failure) => {
+    const pendingLeave = deferred<void>();
+    const normalFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/leave")) {
+        await pendingLeave.promise;
+        if (failure === "network") throw new TypeError("cleanup unavailable");
+        return json({ error: { message: "Cleanup failed" } }, 500);
+      }
+      return normalFetch(input, init);
+    });
+    const first = await mount();
+    await settle(() =>
+      fireEvent.click(screen.getByRole("link", { name: /all rooms/i })),
+    );
+    const navigated = fake.push.mock.calls.length;
+    first.unmount();
+    await mount();
+    const startsBeforeFailure = joins().length;
+    await settle(() => pendingLeave.resolve());
+    expect(navigated).toBe(1);
+    expect(startsBeforeFailure).toBe(1);
+    expect(joins()).toHaveLength(2);
+    expect(screen.getByText("Backend Otter")).toBeDefined();
+    await advance(15_000);
+    expect(heartbeats()).toHaveLength(1);
+  },
+);
+
+test.each([false, true])(
+  "Leave during a pending initial Join stays immediate and cleans up before returning (join fails: %s)",
+  async (failFirstJoin) => {
+    const pendingJoin = deferred<void>();
+    const normalFetch = fetchMock.getMockImplementation()!;
+    const order: string[] = [];
+    let joinStarts = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/join")) {
+        const number = ++joinStarts;
+        order.push(`join${number}`);
+        if (number === 1) {
+          await pendingJoin.promise;
+          if (failFirstJoin)
+            return json({ error: { message: "Old Join failed" } }, 500);
+        }
+      }
+      if (String(input).endsWith("/leave")) {
+        order.push("leave");
+        if (failFirstJoin)
+          return json({ error: { message: "No membership" } }, 403);
+      }
+      return normalFetch(input, init);
+    });
+    const first = await mount();
+    await settle(() =>
+      fireEvent.click(screen.getByRole("button", { name: "Leave" })),
+    );
+    const navigated = fake.push.mock.calls.length;
+    first.unmount();
+    await mount();
+    const startsBeforeCompletion = joinStarts;
+    const historyBeforeCompletion = history.mock.calls.length;
+    await settle(() => pendingJoin.resolve());
+    expect(navigated).toBe(1);
+    expect(startsBeforeCompletion).toBe(1);
+    expect(historyBeforeCompletion).toBe(0);
+    expect(order).toEqual(["join1", "leave", "join2"]);
+    expect(history).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Backend Otter")).toBeDefined();
+    await advance(15_000);
+    expect(heartbeats()).toHaveLength(1);
+  },
+);
+
+test("a pending Leave in one room does not hold up a different room's Join", async () => {
+  const pendingLeave = deferred<void>();
+  const normalFetch = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (input, init) => {
+    if (String(input).endsWith("/leave")) await pendingLeave.promise;
+    return normalFetch(input, init);
+  });
+  const first = await mount();
+  await settle(() =>
+    fireEvent.click(screen.getByRole("button", { name: "Leave" })),
+  );
+  first.unmount();
+  await settle(() => {
+    render(<ChatRoom room={otherRoom} />);
+  });
+  const otherStarted = joins().some(([input]) =>
+    String(input).includes(`/rooms/${otherRoom.id}/join`),
+  );
+  await settle(() => pendingLeave.resolve());
+  expect(otherStarted).toBe(true);
+  expect(screen.getByRole("heading", { name: "Marston" })).toBeDefined();
+  expect(screen.getByText("Backend Otter")).toBeDefined();
+});
+
 test("recovers missed messages once in order, preserving history ownership after live duplicates", async () => {
   await mount();
   const pending = deferred<ChatMessage[]>();
@@ -227,6 +392,12 @@ test("recovers missed messages once in order, preserving history ownership after
   });
   expect(history).toHaveBeenLastCalledWith(room.id, "m1");
   expect(history).toHaveBeenCalledTimes(2);
+  const catchUp = fetchMock.mock.calls.find(([url]) =>
+    String(url).includes("?after=m1"),
+  );
+  expect(new Headers(catchUp?.[1]?.headers).get("Authorization")).toBe(
+    "Bearer persisted-token",
+  );
   await settle(() =>
     pending.resolve([message("m2", 2, true), message("m3", 3, false)]),
   );
@@ -632,4 +803,53 @@ test("Activity return waits for channel removal, ignores stale catch-up and star
   expect(heartbeats()).toHaveLength(1);
   expect(leaves()).toHaveLength(0);
   expect(fake.client.auth.signInAnonymously).not.toHaveBeenCalled();
+});
+
+test("Activity retains sent-message ownership without treating recovered history as a new submission", async () => {
+  const page = (mode: "visible" | "hidden") => (
+    <Activity mode={mode}>
+      <ChatRoom room={room} />
+    </Activity>
+  );
+  const view = render(page("visible"));
+  await settle();
+  fireEvent.change(screen.getByLabelText("Message Library West"), {
+    target: { value: "own" },
+  });
+  await settle(() =>
+    fireEvent.keyDown(screen.getByLabelText("Message Library West"), {
+      key: "Enter",
+    }),
+  );
+  await advance(16);
+  history.mockResolvedValueOnce([]);
+  await settle(() => view.rerender(page("hidden")));
+  await settle(() => view.rerender(page("visible")));
+  await settle(() => emit("SUBSCRIBED"));
+  expect(
+    screen.getByText("own", { selector: "p" }).closest("article")?.dataset
+      .ownMessage,
+  ).toBe("true");
+  const region = screen.getByTestId("message-scroll-region");
+  const scrollTo = vi.fn();
+  Object.defineProperties(region, {
+    clientHeight: { configurable: true, value: 200 },
+    scrollHeight: { configurable: true, value: 1000 },
+    scrollTop: { configurable: true, value: 100 },
+    scrollTo: { configurable: true, value: scrollTo },
+  });
+  fireEvent.scroll(region);
+  history.mockResolvedValueOnce([message("other-tab", 5, true)]);
+  await settle(() => {
+    emit("CHANNEL_ERROR");
+    emit("SUBSCRIBED");
+  });
+  await advance(16);
+  expect(scrollTo).not.toHaveBeenCalled();
+  expect(region.scrollTop).toBe(100);
+  expect(screen.getByRole("button", { name: /1 new message/i })).toBeDefined();
+  expect(
+    screen.getByText("other-tab", { selector: "p" }).closest("article")?.dataset
+      .ownMessage,
+  ).toBe("true");
 });

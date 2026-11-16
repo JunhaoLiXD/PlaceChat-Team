@@ -137,7 +137,9 @@ export function MessageFeed({
   ownMessageIds: Set<string>;
 }) {
   const scrollRegionRef = useRef<HTMLDivElement>(null);
+  const scrollFrameRef = useRef<number | null>(null);
   const previousIdsRef = useRef(new Set(messages.map((message) => message.id)));
+  const previousSubmittedIdsRef = useRef(new Set(ownMessageIds));
   const isNearBottomRef = useRef(true);
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -154,21 +156,41 @@ export function MessageFeed({
     setUnreadCount(0);
   };
 
+  useEffect(
+    () => () => {
+      if (scrollFrameRef.current !== null)
+        cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = null;
+    },
+    [],
+  );
+
   useEffect(() => {
     // Catch-up can insert missed messages before live arrivals already on screen.
     const addedMessages = messages.filter(
       (message) => !previousIdsRef.current.has(message.id),
     );
+    // History ownership (including another tab) does not mean the reader just
+    // submitted a message. A POST acknowledgement may also follow its live echo.
+    const newlySubmitted = messages.some(
+      (message) =>
+        ownMessageIds.has(message.id) &&
+        !previousSubmittedIdsRef.current.has(message.id),
+    );
     previousIdsRef.current = new Set(messages.map((message) => message.id));
-    if (addedMessages.length === 0) return;
-    const onlyOwnMessages = addedMessages.every(
-      (message) => ownMessageIds.has(message.id) || message.is_mine === true,
+    previousSubmittedIdsRef.current = new Set(ownMessageIds);
+    if (addedMessages.length === 0 && !newlySubmitted) return;
+    const onlyOwnMessages = addedMessages.every((message) =>
+      ownMessageIds.has(message.id),
     );
 
-    if (isNearBottomRef.current || onlyOwnMessages) {
-      requestAnimationFrame(() =>
-        scrollToBottom(onlyOwnMessages ? "smooth" : "auto"),
-      );
+    if (isNearBottomRef.current || onlyOwnMessages || newlySubmitted) {
+      if (scrollFrameRef.current !== null)
+        cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = requestAnimationFrame(() => {
+        scrollFrameRef.current = null;
+        scrollToBottom(onlyOwnMessages || newlySubmitted ? "smooth" : "auto");
+      });
     } else {
       setUnreadCount((count) => count + addedMessages.length);
     }
@@ -301,6 +323,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
         window.clearInterval(interval);
         setHasJoined(false);
         setIsSending(false);
+        setOwnMessageIds(new Set());
       },
     };
     visitRef.current = visit;
@@ -383,7 +406,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
       if (!visit.active || visitRef.current !== visit) return;
       setOwnMessageIds((ids) => new Set(ids).add(sentMessage.id));
       // The broadcast of this message may arrive first; merging keeps one copy.
-      visit.recovery.add([sentMessage]);
+      visit.recovery.add([{ ...sentMessage, is_mine: true }]);
       setDraft("");
     } catch (caught) {
       if (!visit.active || visitRef.current !== visit) return;
@@ -401,12 +424,13 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
   // channel and stops the heartbeat, so no more messages arrive from this room.
   const handleLeave = (event?: MouseEvent) => {
     event?.preventDefault();
-    if (isLeaving) return;
-    setIsLeaving(true);
     const visit = visitRef.current;
-    const joined = visit?.joined;
+    if (isLeaving || (visit && !visit.active)) return;
+    setIsLeaving(true);
     visit?.stop();
-    if (joined) {
+    if (visit) {
+      // Queue after even a pending Join; a later visit's Join waits for this
+      // explicit cleanup. Navigation and local cancellation remain immediate.
       void leaveRoom(room.id).catch(() => {
         // Still go back: presence times out after 30 seconds without heartbeats.
       });

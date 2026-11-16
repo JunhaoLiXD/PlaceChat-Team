@@ -36,7 +36,9 @@ Supabase owns automatic channel reconnection. After a previously subscribed room
 
 History, live events and send responses use `mergeMessages` for unique IDs, chronological order and preserved ownership. Recovery makes one request plus at most two retries (after 1 and 3 seconds), retains the original cursor after failures or another drop, and offers **Retry messages** if necessary. Requests are serialized within a visit. Each response follows the server's existing visibility and newest-20 contract; the frontend does not paginate into older history. Late results from Leave, another room or effect cleanup are ignored.
 
-One 15-second heartbeat per successful join continues with the persisted Supabase session and backend-returned nickname, retrying missed HTTP heartbeats on the next tick. Reconnection does not join again or allocate a name. The 60-second hold remains measured by the server from `last_seen_at`. Explicit Leave/All rooms stops recovery and the heartbeat; refresh, unmount, StrictMode and Activity cleanup only stop local work and unsubscribe, without Leave or sign-out. Scrolled-up readers retain their position when catch-up inserts earlier messages.
+One 15-second heartbeat per successful join continues with the persisted Supabase session and backend-returned nickname, retrying missed HTTP heartbeats on the next tick. Reconnection does not join again or allocate a name. The 60-second hold remains measured by the server from `last_seen_at`. Explicit Leave/All rooms stops recovery and the heartbeat and navigates immediately. Join/Leave requests are ordered per room across visits/remounts: cleanup follows even a pending Join, later Joins wait until it settles, and failures release the queue. Other rooms remain independent. Refresh, unmount, StrictMode and Activity cleanup only stop local work and unsubscribe, without Leave or sign-out.
+
+Scrolled-up readers retain their position when catch-up inserts earlier messages, including `is_mine` history sent from another tab. Ownership alone never triggers sending-related scrolling. Only submissions acknowledged in the current visit scroll a reader to the bottom, including when the live echo precedes its POST response. Ownership rendering survives Activity returns independently of the current visit's submission IDs.
 
 #### Two-session, 20-second offline check — pending
 
@@ -47,12 +49,14 @@ These live checks have not been run. Use a frontend running this branch and its 
 - [ ] Restore A's connection. Check automatic resubscription, the Reconnected banner, and one history request using the ID from before the gap (recent history if empty). Every missed message in the server's newest-20 window appears once, chronologically, with correct ownership even if a live message arrives first.
 - [ ] A retains the same nickname and persisted session, and one heartbeat resumes on the next 15-second tick without another anonymous sign-in or reconnect join. The hold starts at the last successful heartbeat, not at the moment the browser goes offline.
 - [ ] Scroll A upward before another short interruption and confirm recovery does not pull it down. Refresh within the hold: history/nickname return, one heartbeat runs, and refresh/cleanup sends no Leave. Explicit Leave/All rooms stops local work and sends Leave.
+- [ ] From another tab sharing A's session, send messages while A is offline and scrolled upward. On recovery these historical own messages retain ownership styling, preserve scrolling and show the new-message indicator. A newly submitted message in A still scrolls normally, even if its live echo arrives first.
+- [ ] Delay a Leave response, navigate with Leave/Back, and quickly return to that room. Navigation is immediate; the new Join waits for cleanup, then sending and one heartbeat resume. Repeat with a pending initial Join and failed cleanup; another room's Join must stay independent.
 
 #### Parallel PR overlap
 
-This branch starts from `origin/main` and does not include PRs #95, #96 or #97. Coordinate overlapping edits before merging:
+This branch starts from `origin/main` and remains separate from PRs #95, #96 and #97. Coordinate overlapping edits before merging:
 
-- PR #95/PBI-34: `src/components/chat-room.tsx`, `src/lib/use-room-channel.ts`, `__tests__/use-room-channel.test.ts` and this README. Its backend nickname-allocation fix and cross-visit Join/Leave request ordering remain separate.
+- PR #95/PBI-34: `src/components/chat-room.tsx`, `src/lib/placechat-api.ts`, `src/lib/use-room-channel.ts`, `__tests__/use-room-channel.test.ts` and this README. The frontend per-room Join/Leave queue is aligned with #95; reconcile it once when merging both PRs. Its backend nickname-allocation fix remains separate and is not included here.
 - PR #96/PBI-27: `src/components/chat-room.tsx`, `src/lib/use-room-channel.ts` and `__tests__/use-room-channel.test.ts`. Its backend visibility/retention and live message-removal handling remain separate; recovery uses the existing history endpoint.
 - PR #97/#91: no overlapping changed files. Its backend count publisher and load-test work remain separate.
 
