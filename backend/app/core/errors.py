@@ -68,6 +68,12 @@ class RoomNotFound(AppError):
     message = "This room does not exist or has been closed."
 
 
+class MessageNotFound(AppError):
+    status_code = 404
+    code = "MESSAGE_NOT_FOUND"
+    message = "This message does not exist or has been removed."
+
+
 class AlreadyReported(AppError):
     status_code = 409
     code = "ALREADY_REPORTED"

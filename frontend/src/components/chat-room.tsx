@@ -293,6 +293,14 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
   const channelStatus = useRoomChannel(
     mockMode || isLeaving ? null : room.id,
     (message) => visitRef.current?.recovery.add([message]),
+    (messageId) => {
+      const visit = visitRef.current;
+      if (!visit?.active || visit.roomId !== room.id) return;
+      visit.recovery.remove(messageId);
+      setMessages((current) =>
+        current.filter((message) => message.id !== messageId),
+      );
+    },
     (status) => visitRef.current?.recovery.status(status),
   );
   const badge = CONNECTION_BADGES[mockMode ? "demo" : channelStatus];

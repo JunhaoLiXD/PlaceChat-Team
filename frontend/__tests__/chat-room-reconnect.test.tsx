@@ -175,6 +175,9 @@ function emit(state: string, channel = currentChannel()) {
 function live(item: ChatMessage, channel = currentChannel()) {
   channel.handlers.get("message.created")?.({ payload: item });
 }
+function remove(id: string, channel = currentChannel()) {
+  channel.handlers.get("message.removed")?.({ payload: { id } });
+}
 async function settle(action: () => void = () => {}) {
   await act(async () => {
     action();
@@ -209,6 +212,48 @@ function heartbeats() {
 function joins() {
   return fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/join"));
 }
+
+test("removal wins over in-flight catch-up and live echoes without changing the gap cursor", async () => {
+  await mount();
+  const pending = deferred<ChatMessage[]>();
+  history.mockReturnValueOnce(pending.promise);
+  await settle(() => {
+    emit("CHANNEL_ERROR");
+    emit("SUBSCRIBED");
+    remove("m1");
+    remove("m2");
+  });
+  expect(bodies()).toEqual([]);
+  expect(history).toHaveBeenLastCalledWith(room.id, "m1");
+  await settle(() => pending.resolve([message("m2", 2), message("m3", 3)]));
+  await settle(() => {
+    live(message("m1", 1));
+    live(message("m2", 2));
+  });
+  expect(bodies()).toEqual(["m3"]);
+});
+
+test("removal wins over initial history and a delayed send response", async () => {
+  const initial = deferred<ChatMessage[]>();
+  history.mockReturnValueOnce(initial.promise);
+  await mount();
+  const post = deferred<ChatMessage>();
+  send.mockReturnValueOnce(post.promise);
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "own" } });
+  await settle(() =>
+    fireEvent.click(screen.getByRole("button", { name: "Send" })),
+  );
+  await settle(() => {
+    live(message("own", 4));
+    remove("own");
+    remove("m1");
+  });
+  await settle(() => {
+    initial.resolve([message("m1", 1), message("m2", 2)]);
+    post.resolve(message("own", 4));
+  });
+  expect(bodies()).toEqual(["m2"]);
+});
 function leaves() {
   return fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/leave"));
 }

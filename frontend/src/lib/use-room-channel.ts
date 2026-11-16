@@ -31,6 +31,7 @@ const STATUS_BY_STATE: Record<string, RoomChannelStatus> = {
 export function useRoomChannel(
   roomId: string | null,
   onMessage: (message: ChatMessage) => void,
+  onMessageRemoved?: (messageId: string) => void,
   onStatus?: (status: RoomChannelStatus) => void,
 ): RoomChannelStatus {
   const [state, setState] = useState<{
@@ -40,10 +41,14 @@ export function useRoomChannel(
   const onMessageRef = useRef(onMessage);
   const onStatusRef = useRef(onStatus);
   const removalRef = useRef<Promise<unknown> | undefined>(undefined);
+  const onMessageRemovedRef = useRef(onMessageRemoved);
 
   useEffect(() => {
     onMessageRef.current = onMessage;
     onStatusRef.current = onStatus;
+  });
+  useEffect(() => {
+    onMessageRemovedRef.current = onMessageRemoved;
   });
 
   useEffect(() => {
@@ -76,6 +81,11 @@ export function useRoomChannel(
             // Only this room's messages, even if an event arrives on the wrong topic (#20).
             if (cancelled || message?.room_id !== roomId) return;
             onMessageRef.current(message);
+          })
+          .on("broadcast", { event: "message.removed" }, ({ payload }) => {
+            const messageId = (payload as { id?: unknown })?.id;
+            if (cancelled || typeof messageId !== "string") return;
+            onMessageRemovedRef.current?.(messageId);
           })
           .subscribe((channelState) => {
             report(STATUS_BY_STATE[channelState] ?? "connecting");

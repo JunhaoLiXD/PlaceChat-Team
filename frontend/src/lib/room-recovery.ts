@@ -25,6 +25,7 @@ export function createRoomRecovery(
   let latest: ChatMessage | undefined;
   let gap: { after: string | undefined } | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const removedIds = new Set<string>();
 
   function clearRetry() {
     clearTimeout(timer);
@@ -33,7 +34,9 @@ export function createRoomRecovery(
 
   function add(incoming: ChatMessage[]) {
     if (stopped) return;
-    const messages = incoming.filter((message) => message.room_id === roomId);
+    const messages = incoming.filter(
+      (message) => message.room_id === roomId && !removedIds.has(message.id),
+    );
     latest = mergeMessages(latest ? [latest] : [], messages).at(-1);
     if (!initial && !gap) cursor = latest?.id;
     onMessages(messages);
@@ -94,6 +97,12 @@ export function createRoomRecovery(
 
   return {
     add,
+    remove(messageId: string) {
+      if (stopped) return;
+      // Keep a verified cursor even if it was removed; the server can still
+      // resolve its timestamp. Ignore older in-flight snapshots and live echoes.
+      removedIds.add(messageId);
+    },
     start() {
       started = true;
       void load();

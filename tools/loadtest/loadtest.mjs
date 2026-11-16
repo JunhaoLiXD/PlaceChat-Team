@@ -13,7 +13,7 @@ import { parseArgs } from "node:util";
 
 import { createClient } from "@supabase/supabase-js";
 
-const TARGETS = { deliveryP95Ms: 1000, roomListP95Ms: 2000 };
+const TARGETS = { deliveryP95Ms: 1000, roomListP95Ms: 2000, joinMaxMs: 1000 };
 const HEARTBEAT_MS = 15_000; // frontend constant, §11
 const SUBSCRIBE_TIMEOUT_MS = 20_000;
 const GRACE_MS = 5_000; // wait for late deliveries after the last send
@@ -85,8 +85,8 @@ async function api(path, { method = "GET", token } = {}) {
     method,
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
-  const ms = performance.now() - started;
   const body = response.headers.get("content-type")?.includes("json") ? await response.json() : null;
+  const ms = performance.now() - started;
   return { status: response.status, body, ms };
 }
 
@@ -243,6 +243,9 @@ async function main() {
   const result = {
     runId,
     config: {
+      apiBase: config.apiBase,
+      // Caller-supplied provenance; verify the running backend checkout first.
+      backendCommit: process.env.PLACECHAT_BACKEND_COMMIT ?? null,
       clients: config.clients,
       durationS: config.durationS,
       rate: config.rate,
@@ -250,7 +253,7 @@ async function main() {
       room: target.name,
       otherRoom: other.name,
     },
-    join: { ...stats(joins.map((join) => join.ms)), errors: joinErrors, uniqueNicknames: nicknames.size },
+    join: { ...stats(joins.map((join) => join.ms)), samplesMs: joins.map((join) => join.ms), errors: joinErrors, uniqueNicknames: nicknames.size },
     send: { attempted: total, ok: sentOk, errors: sendErrors, post: stats(posts) },
     delivery: { expected, received: deliveries.length, missing: expected - deliveries.length, ...stats(deliveries) },
     roomList: stats(roomListMs),
@@ -258,6 +261,7 @@ async function main() {
   };
 
   const checks = {
+    "every join < 1 s": result.join.samplesMs.every((ms) => ms < TARGETS.joinMaxMs),
     "delivery p95 < 1 s": result.delivery.p95 !== null && result.delivery.p95 < TARGETS.deliveryP95Ms,
     "every message delivered": result.delivery.missing === 0,
     "no message in another room": problems.leakedToOtherRoom === 0 && problems.wrongRoom === 0,

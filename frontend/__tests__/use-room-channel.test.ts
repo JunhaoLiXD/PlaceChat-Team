@@ -12,6 +12,7 @@ const fake = vi.hoisted(() => {
     topic: string;
     options: unknown;
     broadcast?: BroadcastHandler;
+    removed?: BroadcastHandler;
     status?: StatusHandler;
   }[] = [];
   const client = {
@@ -51,7 +52,14 @@ beforeEach(() => {
     fake.channels.push(record);
     const channel = {
       on: (_type: string, _filter: unknown, handler: BroadcastHandler) => {
-        record.broadcast = handler;
+        if (
+          _filter &&
+          (_filter as { event?: string }).event === "message.removed"
+        ) {
+          record.removed = handler;
+        } else {
+          record.broadcast = handler;
+        }
         return channel;
       },
       subscribe: (handler: StatusHandler) => {
@@ -63,10 +71,17 @@ beforeEach(() => {
   });
 });
 
-async function connected(roomId = "room-1", onMessage = vi.fn()) {
-  const hook = renderHook(({ id }) => useRoomChannel(id, onMessage), {
-    initialProps: { id: roomId },
-  });
+async function connected(
+  roomId = "room-1",
+  onMessage = vi.fn(),
+  onMessageRemoved = vi.fn(),
+) {
+  const hook = renderHook(
+    ({ id }) => useRoomChannel(id, onMessage, onMessageRemoved),
+    {
+      initialProps: { id: roomId },
+    },
+  );
   await waitFor(() => expect(fake.channels).toHaveLength(1));
   return { hook, onMessage, channel: fake.channels[0] };
 }
@@ -118,6 +133,7 @@ describe("useRoomChannel", () => {
       useRoomChannel(
         "room-1",
         () => received.push("message"),
+        undefined,
         (status) => received.push(status),
       ),
     );
@@ -131,29 +147,64 @@ describe("useRoomChannel", () => {
     hook.unmount();
   });
 
-  test("uses the latest status and message callbacks without another channel", async () => {
+  test("uses the latest status, removal and message callbacks without another channel", async () => {
     const oldMessage = vi.fn(),
-      oldStatus = vi.fn();
+      oldStatus = vi.fn(),
+      oldRemoved = vi.fn();
     const nextMessage = vi.fn(),
-      nextStatus = vi.fn();
+      nextStatus = vi.fn(),
+      nextRemoved = vi.fn();
     const hook = renderHook(
-      ({ receive, status }) => useRoomChannel("room-1", receive, status),
+      ({ receive, removed, status }) =>
+        useRoomChannel("room-1", receive, removed, status),
       {
-        initialProps: { receive: oldMessage, status: oldStatus },
+        initialProps: {
+          receive: oldMessage,
+          removed: oldRemoved,
+          status: oldStatus,
+        },
       },
     );
     await waitFor(() => expect(fake.channels).toHaveLength(1));
-    hook.rerender({ receive: nextMessage, status: nextStatus });
+    hook.rerender({
+      receive: nextMessage,
+      removed: nextRemoved,
+      status: nextStatus,
+    });
     act(() => {
       fake.channels[0].status?.("SUBSCRIBED");
       fake.channels[0].broadcast?.({ payload: message("room-1") });
+      fake.channels[0].removed?.({ payload: { id: "m1" } });
     });
     expect(nextStatus).toHaveBeenCalledExactlyOnceWith("subscribed");
     expect(nextMessage).toHaveBeenCalledExactlyOnceWith(message("room-1"));
+    expect(nextRemoved).toHaveBeenCalledExactlyOnceWith("m1");
     expect(oldStatus).not.toHaveBeenCalled();
     expect(oldMessage).not.toHaveBeenCalled();
+    expect(oldRemoved).not.toHaveBeenCalled();
     expect(fake.channels).toHaveLength(1);
     hook.unmount();
+  });
+
+  test("passes removed message ids to the removal callback", async () => {
+    const onMessageRemoved = vi.fn();
+    const { channel } = await connected("room-1", vi.fn(), onMessageRemoved);
+
+    act(() => channel.removed?.({ payload: { id: "m1" } }));
+    act(() => channel.removed?.({ payload: { id: 42 } }));
+
+    expect(onMessageRemoved).toHaveBeenCalledExactlyOnceWith("m1");
+  });
+
+  test("ignores removal callbacks from a previous room or after unmount", async () => {
+    const onRemoved = vi.fn();
+    const { hook, channel } = await connected("room-1", vi.fn(), onRemoved);
+    hook.rerender({ id: "room-2" });
+    await waitFor(() => expect(fake.channels).toHaveLength(2));
+    act(() => channel.removed?.({ payload: { id: "old-room" } }));
+    hook.unmount();
+    act(() => fake.channels[1].removed?.({ payload: { id: "closed-room" } }));
+    expect(onRemoved).not.toHaveBeenCalled();
   });
 
   test("leaves the old channel when the room changes or the page closes", async () => {

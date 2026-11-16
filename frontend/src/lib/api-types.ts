@@ -110,6 +110,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/messages/{message_id}/reports": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Create Message Report */
+    post: operations["create_message_report_api_v1_messages__message_id__reports_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/admin/rooms": {
     parameters: {
       query?: never;
@@ -297,6 +314,44 @@ export interface components {
       nickname: string;
       /** Body */
       body: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+    };
+    /** ReportCreate */
+    ReportCreate: {
+      /** Reason */
+      reason?: ("harassment" | "spam" | "other") | null;
+    };
+    /**
+     * ReportResponse
+     * @description A report representation that never includes reporter_session_id.
+     */
+    ReportResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Message Id
+       * Format: uuid
+       */
+      message_id: string;
+      /**
+       * Room Id
+       * Format: uuid
+       */
+      room_id: string;
+      /** Reason */
+      reason: ("harassment" | "spam" | "other") | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "pending" | "removed" | "dismissed";
       /**
        * Created At
        * Format: date-time
@@ -577,6 +632,41 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["MessageResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  create_message_report_api_v1_messages__message_id__reports_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        message_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ReportCreate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ReportResponse"];
         };
       };
       /** @description Validation Error */
