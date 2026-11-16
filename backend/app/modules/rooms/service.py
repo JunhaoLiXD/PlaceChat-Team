@@ -85,27 +85,22 @@ def _presence_transaction(
     db: DbSession, room_id: UUID, *, sweep: bool = False
 ) -> Iterator[tuple[Room, datetime]]:
     pending = None
-    try:
-        with db.begin():
-            # Sample time only after waiting for the room's transaction lock.
-            repository.lock_room(db, room_id)
-            room = repository.get_active_room(db, room_id, lock=True)
-            if room is None:
-                raise RoomNotFound()
-            now = utc_now()
-            since = presence_since(now)
-            state = repository.get_presence_snapshot(db, room_id, since=None if sweep else since)
-            yield room, now
-            count = repository.refresh_presence_count(db, state, since)
-            # Reserve publication order while the DB lock still serializes changes.
-            # No waiting or network I/O happens until the transaction has committed.
-            pending = presence.reserve_count(room_id, count)
-    except BaseException:
-        if pending is not None:
-            pending.cancel()
-        raise
+    with db.begin():
+        # Sample time only after waiting for the room's transaction lock.
+        repository.lock_room(db, room_id)
+        room = repository.get_active_room(db, room_id, lock=True)
+        if room is None:
+            raise RoomNotFound()
+        now = utc_now()
+        since = presence_since(now)
+        state = repository.get_presence_snapshot(db, room_id, since=None if sweep else since)
+        yield room, now
+        count = repository.refresh_presence_count(db, state, since)
+        # Reserve a revision under the DB lock, without registering any queued work.
+        pending = presence.reserve_count(room_id, count)
+    # Commit failure/rollback never reaches this quick, nonblocking notification.
     if pending is not None:
-        pending.publish()
+        pending.notify_committed()
 
 
 def join_room(db: DbSession, session_id: str, room_id: UUID) -> JoinRoomResponse:
