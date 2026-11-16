@@ -244,6 +244,11 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
   // A saved nickname is not proof that the current Activity visit has joined.
   const [hasJoined, setHasJoined] = useState(false);
   const joinedVisitRef = useRef(false);
+  const visitRef = useRef<{
+    roomId: string;
+    active: boolean;
+    removedIds: Set<string>;
+  } | null>(null);
   const leaveVisitRef = useRef<(() => void) | null>(null);
   const router = useRouter();
 
@@ -266,7 +271,24 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
 
   const channelStatus = useRoomChannel(
     mockMode || isLeaving ? null : room.id,
-    (message) => setMessages((current) => mergeMessages(current, [message])),
+    (message) => {
+      const visit = visitRef.current;
+      if (
+        !visit?.active ||
+        visit.roomId !== room.id ||
+        visit.removedIds.has(message.id)
+      )
+        return;
+      setMessages((current) => mergeMessages(current, [message]));
+    },
+    (messageId) => {
+      const visit = visitRef.current;
+      if (!visit?.active || visit.roomId !== room.id) return;
+      visit.removedIds.add(messageId);
+      setMessages((current) =>
+        current.filter((message) => message.id !== messageId),
+      );
+    },
   );
   const badge = CONNECTION_BADGES[mockMode ? "demo" : channelStatus];
   const banner = useConnectionBanner(channelStatus);
@@ -274,11 +296,19 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
   useEffect(() => {
     let cancelled = false;
     let interval: number | undefined;
+    const visit = {
+      roomId: room.id,
+      active: true,
+      removedIds: new Set<string>(),
+    };
+    visitRef.current = visit;
     const request = joinRoom(room.id);
     const stop = () => {
       cancelled = true;
+      visit.active = false;
       joinedVisitRef.current = false;
       setHasJoined(false);
+      setIsSending(false);
       window.clearInterval(interval);
     };
     const leave = () => {
@@ -312,7 +342,12 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
         if (!mockMode) {
           const history = await getRoomMessages(room.id);
           if (!cancelled) {
-            setMessages((current) => mergeMessages(current, history));
+            setMessages((current) =>
+              mergeMessages(
+                current,
+                history.filter((message) => !visit.removedIds.has(message.id)),
+              ),
+            );
           }
         }
       } catch (caught) {
@@ -356,6 +391,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     }
 
     setIsSending(true);
+    const visit = visitRef.current;
 
     try {
       const sentMessage = await sendRoomMessage(
@@ -363,18 +399,22 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
         trimmedDraft,
         nickname,
       );
+      if (!visit?.active || visitRef.current !== visit) return;
       setOwnMessageIds((ids) => new Set(ids).add(sentMessage.id));
       // The broadcast of this message may arrive first; merging keeps one copy.
-      setMessages((current) => mergeMessages(current, [sentMessage]));
+      if (!visit.removedIds.has(sentMessage.id)) {
+        setMessages((current) => mergeMessages(current, [sentMessage]));
+      }
       setDraft("");
     } catch (caught) {
+      if (!visit?.active || visitRef.current !== visit) return;
       setSendError(
         caught instanceof Error
           ? caught.message
           : "Your message couldn’t be sent.",
       );
     } finally {
-      setIsSending(false);
+      if (visit?.active && visitRef.current === visit) setIsSending(false);
     }
   };
 

@@ -22,6 +22,7 @@ const channel = vi.hoisted(() => ({
   status: "connecting" as RoomChannelStatus,
   roomId: undefined as string | null | undefined,
   onMessage: (() => {}) as (message: ChatMessage) => void,
+  onMessageRemoved: (() => {}) as (messageId: string) => void,
 }));
 
 const router = vi.hoisted(() => ({ push: vi.fn() }));
@@ -41,9 +42,11 @@ vi.mock("@/lib/use-room-channel", () => ({
   useRoomChannel: (
     roomId: string | null,
     onMessage: (message: ChatMessage) => void,
+    onMessageRemoved: (messageId: string) => void,
   ) => {
     channel.roomId = roomId;
     channel.onMessage = onMessage;
+    channel.onMessageRemoved = onMessageRemoved;
     return channel.status;
   },
 }));
@@ -180,6 +183,83 @@ async function rejoinActivityWithDraft() {
   });
   return { input, rejoin };
 }
+
+test("removal wins over pending history and delayed live echoes", async () => {
+  const history = deferResponse();
+  const normalFetch = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation((url, init) =>
+    String(url).endsWith("/messages") && !init?.method
+      ? history.promise
+      : normalFetch(url, init),
+  );
+  render(<ChatRoom room={room} />);
+  await screen.findByText(/you are/i);
+  await act(async () => {
+    channel.onMessage(message("removed", "Hidden by an admin"));
+    channel.onMessage(message("visible", "Still visible"));
+  });
+  expect(screen.getByText("Hidden by an admin")).toBeDefined();
+  await act(async () => channel.onMessageRemoved("removed"));
+  expect(screen.queryByText("Hidden by an admin")).toBeNull();
+  await act(async () => {
+    history.resolve(json([message("removed", "Hidden by an admin")]));
+    channel.onMessage(message("removed", "Hidden by an admin"));
+  });
+  expect(screen.queryByText("Hidden by an admin")).toBeNull();
+  expect(screen.getByText("Still visible")).toBeDefined();
+});
+
+test("removal wins over a delayed send acknowledgement", async () => {
+  render(<ChatRoom room={room} />);
+  await screen.findByText(/you are/i);
+  const post = deferResponse();
+  fetchMock.mockReturnValueOnce(post.promise);
+  fireEvent.change(screen.getByRole("textbox"), {
+    target: { value: "Removed send" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await act(async () => {
+    channel.onMessage(message("sent-1", "Removed send"));
+  });
+  await act(async () => channel.onMessageRemoved("sent-1"));
+  await act(async () =>
+    post.resolve(json(message("sent-1", "Removed send"), 201)),
+  );
+  expect(screen.queryByText("Removed send", { selector: "p" })).toBeNull();
+});
+
+test.each([201, 503])(
+  "a late send response (HTTP %i) cannot change a returning visit",
+  async (status) => {
+    const page = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <ChatRoom room={room} />
+      </Activity>
+    );
+    const view = render(page("visible"));
+    await screen.findByText(/you are/i);
+    const post = deferResponse();
+    fetchMock.mockReturnValueOnce(post.promise);
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "Old draft" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => {});
+    view.rerender(page("hidden"));
+    view.rerender(page("visible"));
+    await screen.findByText(/you are/i);
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "New draft" },
+    });
+    await act(async () =>
+      post.resolve(json(message("old-send", "Old draft"), status)),
+    );
+    expect(screen.getByRole("textbox")).toHaveProperty("value", "New draft");
+    expect(screen.queryByText("Old draft", { selector: "p" })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(auth.signOut).not.toHaveBeenCalled();
+  },
+);
 
 test("joins with the session token and starts without demo messages", async () => {
   render(<ChatRoom room={room} />);

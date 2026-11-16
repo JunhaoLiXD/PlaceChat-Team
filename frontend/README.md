@@ -44,11 +44,15 @@ All live checks below are **pending** until the reviewed change reaches staging;
 - [ ] **Pending:** Stall the initial join, then click Leave or All rooms/Back. Confirm navigation completes immediately. Return quickly while old requests remain pending: the new join waits for old cleanup, Leave/Back remains usable, and only the new successful visit starts a heartbeat. Check a failed cleanup too.
 - [ ] **Pending:** With the first session absent for 59 seconds (also check the inclusive 60-second boundary), join from the second session and confirm it cannot take the held nickname. After expiration or explicit Leave, the released name is available to that other session. Allocation is random, so a browser run alone cannot force reuse; the deterministic backend tests verify eligibility and the exact boundary.
 
-Reconnect catch-up changes (PBI-35) and count-broadcast performance (#91) remain separate work.
+### Integration with PR #98
+
+This branch merges current `origin/main`, including #96's visible history/7-day retention and `message.removed` handling, #97's asynchronous count publisher, and #99's reporting/auth/API changes. Removed IDs stay hidden if an earlier history request, send response or live echo arrives later; callbacks from closed channels are ignored.
+
+PR #98/PBI-35 remains independent. Both PRs edit `src/components/chat-room.tsx`, `src/lib/placechat-api.ts`, `src/lib/use-room-channel.ts`, `__tests__/use-room-channel.test.ts` and this README. The per-room Join/Leave queue and explicit-Leave/cleanup rules agree. After either PR merges, merge the new `main` into the other and retain one queue, one heartbeat per joined visit, #95's backend nickname allocation and #98's frozen-cursor recovery/ownership/scrolling. Keep `onMessageRemoved` as the third hook callback and #98's `onStatus` as the fourth; do not replace either callback with the other. The combined live refresh, Leave/switch and reconnect checks remain pending.
 
 ## Live messages
 
-`useRoomChannel(roomId, onMessage)` in `src/lib/use-room-channel.ts` joins the room's private Realtime channel and returns its status; `useConnectionBanner(status)` turns that status into the "Connection lost" / "Reconnected" banner. With `NEXT_PUBLIC_USE_MOCKS=true` the chat room uses sample data and does not connect.
+`useRoomChannel(roomId, onMessage, onMessageRemoved?)` in `src/lib/use-room-channel.ts` joins the room's private Realtime channel, receives created/removed messages and returns its status; `useConnectionBanner(status)` turns that status into the "Connection lost" / "Reconnected" banner. With `NEXT_PUBLIC_USE_MOCKS=true` the chat room uses sample data and does not connect.
 
 ## API types
 
