@@ -82,6 +82,7 @@ def pg_engine() -> Iterator[Engine]:
             for migration in (
                 "20261014180036_create_rooms.sql",
                 "20261015201410_create_room_members.sql",
+                "20261021031518_create_messages.sql",
                 "20261021192836_create_admin_users.sql",
                 "20261109120000_create_room_presence_counts.sql",
                 "20261116100000_create_reports.sql",
