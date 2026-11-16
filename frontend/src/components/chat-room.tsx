@@ -226,6 +226,9 @@ export function MessageFeed({
 
 export function ChatRoom({ room }: { room: RoomSummary }) {
   const mockMode = shouldUseMocks();
+  const [participantCount, setParticipantCount] = useState(
+    room.participant_count,
+  );
   const [nickname, setNickname] = useState<string | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
   // Real rooms start empty until the history endpoint (C3, Sprint 2) exists.
@@ -251,12 +254,14 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
 
   const participantLabel = useMemo(
     () =>
-      `${room.participant_count} ${room.participant_count === 1 ? "person" : "people"} here`,
-    [room.participant_count],
+      `${participantCount} ${participantCount === 1 ? "person" : "people"} here`,
+    [participantCount],
   );
 
-  const channelStatus = useRoomChannel(mockMode ? null : room.id, (message) =>
-    setMessages((current) => mergeMessages(current, [message])),
+  const channelStatus = useRoomChannel(
+    mockMode ? null : room.id,
+    (message) => setMessages((current) => mergeMessages(current, [message])),
+    setParticipantCount,
   );
   const badge = CONNECTION_BADGES[mockMode ? "demo" : channelStatus];
   const banner = useConnectionBanner(channelStatus);
