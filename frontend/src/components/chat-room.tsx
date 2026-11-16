@@ -547,6 +547,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
           ) : null}
 
           <MessageFeed
+            key={room.id}
             messages={messages.filter((message) => message.room_id === room.id)}
             ownMessageIds={ownMessageIds}
           />

@@ -682,6 +682,44 @@ test("room changes ignore old history, sends and channel callbacks", async () =>
   expect(leaves()).toHaveLength(0);
 });
 
+test.each(["unread indicator", "pending scroll"])(
+  "room changes discard the old feed's %s",
+  async (state) => {
+    const view = await mount();
+    await advance(16);
+    const region = screen.getByTestId("message-scroll-region");
+    const scrollTo = vi.fn();
+    Object.defineProperties(region, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, value: 100 },
+      scrollTo: { configurable: true, value: scrollTo },
+    });
+    fireEvent.scroll(region);
+    if (state === "unread indicator") {
+      await settle(() => live(message("new-in-old-room", 2)));
+      expect(
+        screen.getByRole("button", { name: /1 new message/i }),
+      ).toBeDefined();
+    } else {
+      fireEvent.change(screen.getByLabelText("Message Library West"), {
+        target: { value: "own" },
+      });
+      await settle(() =>
+        fireEvent.keyDown(screen.getByLabelText("Message Library West"), {
+          key: "Enter",
+        }),
+      );
+    }
+    history.mockResolvedValueOnce([]);
+    await settle(() => view.rerender(<ChatRoom room={otherRoom} />));
+    await advance(16);
+    expect(bodies()).toEqual([]);
+    expect(screen.queryByRole("button", { name: /new message/i })).toBeNull();
+    expect(scrollTo).not.toHaveBeenCalled();
+  },
+);
+
 test("cleanup clears retries and heartbeat without sending Leave or signing out", async () => {
   const view = await mount();
   history.mockRejectedValueOnce(new Error("offline"));
