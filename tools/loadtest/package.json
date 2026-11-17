@@ -1,0 +1,15 @@
+{
+  "name": "placechat-loadtest",
+  "private": true,
+  "description": "PBI-44 load test: 50 anonymous clients in one room",
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "loadtest": "node --env-file-if-exists=../../frontend/.env.local loadtest.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.117.3"
+  }
+}

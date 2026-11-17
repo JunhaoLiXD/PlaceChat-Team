@@ -1,6 +1,6 @@
 # PlaceChat Technical Design
 
-Final technical plan for Sprints 1 and 2 · CEN3031 Group 4 (10700) · Version 1.4 · October 13, 2026
+Final technical plan for Sprints 1 and 2 · CEN3031 Group 4 (10700) · Version 1.7 · November 10, 2026
 
 Prepared by Junhao Li (Product Manager) for Zhijie Yuan, Yufei Xiao, and Chuks Ofojuah.
 
@@ -141,12 +141,12 @@ FastAPI is a **modular monolith**: one deployment, split into modules with clear
 |---|---|---|---|
 | `core` | App setup, settings, database connection, error format, health check | Junhao | 01, 05, 13 |
 | `core/auth` | Verify access tokens; `get_current_session`; `require_admin` | Zhijie | 06, 21 |
-| `core/realtime` | Publish Broadcast events | Yufei | 15 |
+| `core/realtime` | Publish Broadcast events | Junhao | 15 |
 | `modules/rooms` | Room list, join and leave, membership, presence and its sweeper, nickname hold | Zhijie | 04, 07, 25, 29, 34, 35 |
-| `modules/rooms` (admin) | Create, edit, archive rooms | Junhao | 22 |
+| `modules/rooms` (admin) | List (archived included), create, edit, archive rooms | Junhao | 22, 23 |
 | `modules/nicknames` | Generate random nicknames, unique within a room | Yufei | 09, 10 |
-| `modules/messaging` | Pipeline steps 3, 6, 7; history; plain-text safety | Yufei | 12, 14, 15, 16, 26, 27 |
-| `modules/safety` | Rate limit, reports, word filter (Yufei); temporary blocks (Zhijie) | Yufei, Zhijie | 19, 31, 33, 36, 37; 42, 43 |
+| `modules/messaging` | Pipeline step 3, history, plain-text safety (Yufei); the send endpoint with steps 6 and 7 (Junhao) | Yufei, Junhao | 12, 16, 26, 27; 14, 15 |
+| `modules/safety` | Rate limit, reports, word filter (Yufei); word-list admin (Junhao); temporary blocks (Zhijie) | Yufei, Junhao, Zhijie | 19, 31, 33, 36; 37; 42, 43 |
 
 ### 3.4 Module contracts
 
@@ -160,8 +160,8 @@ These signatures exist in the code as stubs (PBI-01). Each owner replaces their 
 | `ensure_member(db, session_id, room_id) -> Membership` (404 if the room is not active, 403 if not joined) | Zhijie | Messaging pipeline |
 | `check_not_blocked(db, session_id)` raises `Blocked(until)`; a no-op stub until PBI-42 | Zhijie | Messaging pipeline |
 | `check_rate_limit(db, session_id)` raises `RateLimited(retry_after)` | Yufei | Messaging pipeline |
-| `filter_text(text) -> str`; returns the text unchanged until PBI-36 | Yufei | Messaging pipeline |
-| `publish(topic, event, payload)` | Yufei | Messaging, rooms, admin |
+| `filter_text(db, text) -> str`; masks configured blocked words case-insensitively | Yufei | Messaging pipeline |
+| `publish(topic, event, payload)` | Junhao | Messaging, rooms, admin |
 
 ## 4. Message pipeline
 
@@ -193,17 +193,19 @@ All tables live in Supabase PostgreSQL in the `public` schema, and every table h
 | blocks | id, session_id, reason, created_by, created_at, expires_at | Active while expires_at is in the future (E3). |
 | blocked_words | id, word (unique, lowercase), created_at | Edited on the admin Words page (D3). |
 | admin_users | user_id (Supabase Auth user id), display_name, created_at | Allow-list of administrators (E1). |
+| room_presence_counts | room_id (primary key), participant_count | The last count broadcast for each room. Used only to skip unchanged count events; presence itself always comes from room_members (A2). |
 
 `session_id` is the Supabase anonymous user id. We store no names, emails, IP addresses, or locations for students (B1, A3).
 
 ### 5.2 Rules the code must follow
 
 - **Present in a room** means `left_at` is null and `last_seen_at` is within the last 30 seconds. Participant counts use this rule.
-- **Nickname reserved** means `left_at` is null and `last_seen_at` is within the last 60 seconds. If the same session rejoins in that window, it gets the same nickname back (B4). An explicit Leave sets `left_at`, which frees the nickname immediately.
-- **Joining** runs in one transaction that first takes `pg_advisory_xact_lock` on the room. Two people joining at the same moment can therefore never get the same nickname.
+- **Nickname reserved** means `left_at` is null and `last_seen_at` is within the last 60 seconds, including exactly 60 seconds. If the same session rejoins in that window, it gets the same nickname back (B4). After expiration (any time beyond 60 seconds), it gets a different name: allocation excludes that caller's previous nickname as well as the room's held names. An explicit Leave sets `left_at`, which frees the nickname immediately and also requires a different name on that caller's next join. Other sessions can claim a released name. The cutoff is evaluated after acquiring the room lock and before refreshing `last_seen_at`; the 30-second presence cutoff does not end membership or release a nickname.
+- **Joining, leaving, and heartbeats** each run in one transaction that first takes `pg_advisory_xact_lock` on the room. Two people joining at the same moment can therefore never get the same nickname.
 - **Rate limit:** count the session's messages from the last 10 seconds. At 5 or more, reject the message and set `retry_after` to (oldest message time + 10 s − now).
 - **Visible history:** the room's messages where `removed_at` is null and `created_at` is within 7 days. Take the newest 20 and return them oldest first.
-- **Presence sweeper:** a background task in FastAPI runs every 10 seconds. It finds members who just went past the 30-second presence timeout, then broadcasts the new counts. The backend runs as a single instance, so one sweeper is enough.
+- **Count events:** join, leave, and heartbeat recompute the room's count inside their transaction and compare it with `room_presence_counts`. Only a changed count is stored there. A revision reserved under the room lock is notified only after commit; requests never wait for publication. One lifespan-owned async worker coalesces pending counts to the latest committed value per room, including zero, rejects late older notifications, and publishes the two events in §7.3 outside database locks. Queued state is at most one value per room and one in-flight delivery, rather than one waiting publisher per request. Each channel's failures are handled independently; clients recover missed events through REST. Shutdown drains for up to five seconds, then cancels async I/O and closes the owned client.
+- **Presence sweeper:** a background task in FastAPI runs every 10 seconds. It recomputes each active room's count the same way, so members who just went past the 30-second presence timeout produce one count event. The backend runs as a single instance, so one sweeper is enough.
 
 ## 6. Identity and security
 
@@ -262,7 +264,7 @@ using (
 - Row Level Security is on for every `public` table, with no policies.
 - Realtime is private-only, and browsers have receive-only access.
 - Every admin route goes through `require_admin`. Hiding admin pages is not protection.
-- CORS on FastAPI allows only our Vercel domains and `http://localhost:3000`.
+- CORS on FastAPI allows only our Vercel domains and `http://localhost:3000`. Staging also accepts our Vercel preview URLs through `CORS_ORIGIN_REGEX` ([Section 9.4](#94-environment-variables)); production does not set it.
 - Location never leaves the browser, and student IP addresses are never stored.
 - Message bodies are always rendered as text, never as HTML.
 
@@ -278,14 +280,14 @@ FastAPI publishes interactive docs at `/docs`. The frontend generates its TypeSc
 | `POST /rooms/{room_id}/join` | Join; returns the room and the nickname (the same one when rejoining within the hold time) | B1, B2, B4 | Zhijie |
 | `POST /rooms/{room_id}/heartbeat` | Keep presence alive; sent every 15 s | A2, B3 | Zhijie |
 | `POST /rooms/{room_id}/leave` | Leave the room and free the nickname | B3 | Zhijie |
-| `GET /rooms/{room_id}/messages?after={id}` | Newest 20 visible messages, or only those after `{id}` (used to fill a gap after reconnecting) | C3, B4 | Yufei |
-| `POST /rooms/{room_id}/messages` | Send a message through the pipeline ([Section 4](#4-message-pipeline)) | C1, C2, D1 | Yufei |
+| `GET /rooms/{room_id}/messages?after={id}` | Newest 20 visible messages, or only those after `{id}` (used to fill a gap after reconnecting). Members only (`ensure_member`). Each item has `id`, `room_id`, `nickname`, `body`, `created_at`, and `is_mine`, never `session_id`. | C3, B4 | Yufei |
+| `POST /rooms/{room_id}/messages` | Send a message through the pipeline ([Section 4](#4-message-pipeline)) | C1, C2, D1 | Junhao |
 | `POST /messages/{message_id}/reports` | Report a message, with an optional reason | D2 | Yufei |
-| `POST /admin/rooms` · `PATCH /admin/rooms/{id}` · `POST /admin/rooms/{id}/archive` | Create, edit, and archive rooms | E1 | Junhao |
+| `GET /admin/rooms` · `POST /admin/rooms` · `PATCH /admin/rooms/{id}` · `POST /admin/rooms/{id}/archive` | List all rooms (archived included), create, edit, and archive rooms | E1 | Junhao |
 | `GET /admin/reports?status=pending` | Pending reports with message, room, and time | E2 | Yufei |
 | `POST /admin/reports/{id}/remove-message` · `POST /admin/reports/{id}/dismiss` | Handle a report. Removing a message also resolves its other pending reports. | E2 | Yufei |
 | `POST /admin/blocks` | Block the sender of a reported message: `report_id` plus `duration_minutes` (15, 60, or 1440) | E3 | Zhijie |
-| `GET` · `POST` · `DELETE /admin/blocked-words` | Maintain the word list | D3 | Yufei |
+| `GET` · `POST` · `DELETE /admin/blocked-words` | Maintain the word list | D3 | Junhao |
 | `GET /health` (no token, no prefix) | Health check for Render | — | Junhao |
 
 ### 7.2 Error format
@@ -306,6 +308,7 @@ Every error returns the same JSON shape, and the frontend shows `message` to the
 | `BLOCKED` | 403 | Sender is blocked; includes `until` |
 | `CANNOT_REPORT_OWN` | 403 | Reporting your own message |
 | `ROOM_NOT_FOUND` | 404 | Room does not exist or is archived |
+| `MESSAGE_NOT_FOUND` | 404 | Reporting a message that does not exist or was removed |
 | `ALREADY_REPORTED` | 409 | The same person reports the same message twice |
 | `VALIDATION_FAILED` | 422 | Empty, whitespace-only, or over-length message, or another invalid input |
 | `RATE_LIMITED` | 429 | Over the sending limit; includes `retry_after` |
@@ -330,14 +333,14 @@ Every error returns the same JSON shape, and the frontend shows `message` to the
 | `/admin/login` | Admin sign-in | E1 | Chuks |
 | `/admin/rooms` | Create, edit, archive rooms | E1 | Chuks |
 | `/admin/reports` | Pending reports: remove, dismiss, block sender | E2, E3 | Chuks (block button: Zhijie) |
-| `/admin/words` | Blocked-word list | D3 | Yufei, using Chuks's admin layout |
+| `/admin/words` | Blocked-word list | D3 | Junhao, using Chuks's admin layout |
 
 When a backend owner's PBI needs a small UI piece, such as the block button or the Words page, that owner builds it with Chuks's components and Chuks reviews the PR.
 
 ### 7.5 Frontend behavior
 
 - **Connection status (C2, PBI-17).** Watch the channel status (`SUBSCRIBED`, `CHANNEL_ERROR`, `TIMED_OUT`, `CLOSED`) and show the banner from [Section 2.2](#22-product-rules). After reconnecting, call `GET /messages?after={last_id}`.
-- **Presence (A2, B3).** Send a heartbeat every 15 seconds while the room page is open. Call Leave when the user clicks Leave or navigates to another room. Unsubscribe from the channel on leave.
+- **Presence (A2, B3).** Start one heartbeat every 15 seconds after the room visit's join succeeds. Call Leave when the user intentionally leaves via Leave or All rooms/Back to switch rooms. React cleanup stops heartbeats and unsubscribes. Refresh, tab closure, disconnect, and cleanup never call Leave or clear persisted authentication. Rejoin the room URL on refresh/reopening or a kept-alive page's return and display the backend's nickname (B4). Count updates do not trigger another join.
 - **Nearby rooms (A3, PBI-40/41).** Show a "Show rooms near me" button; the browser asks for location permission on the first click. If the Permissions API later reports `granted`, locate automatically on each visit with no prompt.
 - **GPS fix.** Call `getCurrentPosition` once per visit with `enableHighAccuracy: true` (asks the device for GPS), `timeout` 10 s, `maximumAge` 1 minute. If it times out, which is common indoors, retry once with `enableHighAccuracy: false` and use that result. Show "Finding rooms near you…" while waiting. Never use `watchPosition`: one fix per visit is enough and saves battery.
 - **Recommending.** Compute each room's distance with the haversine formula. Rooms within 500 m go in a "Near you" section at the top; all other rooms follow, nearest first. Show rounded distances: nearest 50 m below 1 km, one decimal in km above. Every room stays joinable.
@@ -401,7 +404,7 @@ PlaceChat-Team/
 | Local | `npm run dev` (port 3000) | `uvicorn app.main:app --reload` (port 8000) | Staging project, or your own free Supabase project when testing a new migration | Your branch |
 | Preview | Vercel preview per PR | Staging backend | Staging | Every PR |
 | Staging | Vercel, fixed staging domain | Render `placechat-api-staging` (free) | Supabase `placechat-staging` | `main`, on every merge |
-| Production | Vercel production | Render `placechat-api` (paid) | Supabase `placechat-prod` | `release`, at PBI-45–47 |
+| Production | Vercel production | Render `placechat-api` (free) | Supabase `placechat-prod` | `release`, at PBI-45–47 |
 
 ### 9.2 Hosting setup
 
@@ -414,15 +417,15 @@ PlaceChat-Team/
 ### 9.3 Free tiers and cost
 
 - Render free services sleep after 15 minutes without traffic and take about a minute to wake. Staging stays free, and we accept the sleep: open the site once and wait for it to wake before checkpoints and tests.
-- Production runs on Render's **cheapest paid instance**, which never sleeps, from PBI-45 until the course ends. This is our only expected cost. Without a budget, production would also run free, with a keep-warm ping on demo days only. We cannot ping both services all month, because the 750 free hours per workspace would run out.
-- Supabase free projects pause after about a week without activity, and the free plan allows two active projects, which is exactly staging plus production. Check that staging is active before demos.
+- Production also runs on Render's **free** instance, so the project has no costs. It sleeps like staging: before a demo, an acceptance test, or the release, open the production site and wait about a minute for the backend to wake. Both free services share 750 free hours per workspace each month; sleeping services use none, so we never keep either one awake with a scheduled ping.
+- Supabase free projects pause after about a week without activity, and the free plan allows two active projects, which is exactly staging plus production. Check that both are active before demos, and open each site at least once a week.
 
 ### 9.4 Environment variables
 
 | Where | Variables (names only; values are shared privately) |
 |---|---|
 | Frontend (Vercel) | `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` |
-| Backend (Render) | `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `CORS_ORIGINS`, plus the settings in [Section 11](#11-settings) |
+| Backend (Render) | `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `CORS_ORIGINS`, plus the settings in [Section 11](#11-settings). Staging only: `CORS_ORIGIN_REGEX`, a regular expression that matches our Vercel preview URLs (not a secret). |
 | GitHub Actions secrets | `SUPABASE_STAGING_DB_URL` (the staging session pooler connection string, the same value as the backend's `DATABASE_URL`), plus `SUPABASE_PRODUCTION_DB_URL` in a `production` environment |
 
 ### 9.5 Continuous integration (PBI-02)
@@ -436,7 +439,7 @@ PlaceChat-Team/
 | api-types | Export FastAPI's OpenAPI schema → regenerate the frontend types → fail if they differ from the committed file |
 
 - Once all three jobs pass, they become **required status checks** in the ruleset, alongside the one required review.
-- `migrate.yml` runs `supabase db push` against staging on every push to `main` that changes `supabase/migrations/`. At release, Junhao runs it manually against production.
+- `migrate.yml` runs `supabase db push` against staging on every push to `main` that changes `supabase/migrations/`. Production is migrated only by hand: Actions → migrate → Run workflow with target `production`. That job uses the `production` environment's secret and applies the migrations on the `release` branch, so the database always matches the deployed code. Run it with `dry_run` first to list the pending migrations.
 
 ### 9.6 Testing
 
@@ -449,23 +452,46 @@ PlaceChat-Team/
 
 ### 10.1 Sprints and assignments
 
-There are two 3-week sprints: Sprint 1 runs October 2–22 and Sprint 2 runs October 23 – November 12. The required velocity is 74.5 points per sprint, and capacity is 48 team-hours per sprint. The project board is the live source for status.
+Sprint 1 ran October 2–27 (planned to end October 22). Sprint 2 runs **November 9–22**, two weeks, with an internal deadline of **November 19** for merging. The required velocity is 74.5 points per sprint, and capacity is 48 team-hours per sprint. The project board is the live source for status, and each Sprint 2 issue is #61–#82 (PBI number + 35).
 
 | Sprint | Junhao | Chuks | Zhijie | Yufei | Points |
 |---|---|---|---|---|---|
-| Sprint 1 (PBI-01 – 25) | 01, 02, 05, 13, 18, 22 (17) | 03, 08, 11, 17, 20, 23, 24 (16) | 04, 06, 07, 21, 25 (19) | 09, 10, 12, 14, 15, 16, 19 (21) | 73 |
-| Sprint 2 (PBI-26 – 47) | 39, 44, 45, 46, 47 (14) | 28, 30, 32, 38, 40, 41 (17) | 29, 34, 35, 42, 43 (21) | 26, 27, 31, 33, 36, 37 (24) | 76 |
-| Total | 31 | 33 | 40 | 45 | 149 |
+| Sprint 1 (PBI-01 – 25), as delivered | 01, 02, 05, 13, 14, 15, 17, 18, 22, 24 (28) | 03, 08, 11, 20, 23 (13) | 04, 06, 07, 21, 25 (19) | 09, 10, 12, 16, 19 (13) | 73 |
+| Sprint 2 (PBI-26 – 47) | 37, 39, 44, 45, 46, 47 (17) | 28, 30, 32, 38, 40, 41 (17) | 29, 34, 35, 42, 43 (21) | 26, 27, 31, 33, 36 (21) | 76 |
+| Total | 45 | 30 | 40 | 34 | 149 |
+
+In Sprint 1, Junhao took over PBI-14 and PBI-15 from Yufei, PBI-17 and PBI-24 from Chuks, and the spike. In Sprint 2, PBI-37 moved from Yufei to Junhao.
 
 ### 10.2 Order of work in Sprint 1
 
 | Week | Focus | Items |
 |---|---|---|
-| 1 | Foundation and spike | PBI-01 skeleton and contract stubs, PBI-02 CI, PBI-05 platforms and staging (Junhao). Schema for rooms, room_members, and messages. PBI-04 + PBI-03 room list end to end. PBI-06 anonymous session. **Spike** (Zhijie + Yufei, about 2 hours): anonymous sign-in → FastAPI verifies the token → FastAPI broadcasts to a private channel → the browser receives it. This tests risk R3 first. |
+| 1 | Foundation and spike | PBI-01 skeleton and contract stubs, PBI-02 CI, PBI-05 platforms and staging (Junhao). Schema for rooms, room_members, and messages. PBI-04 + PBI-03 room list end to end. PBI-06 anonymous session. **Spike** (done by Junhao on October 20; planned for Zhijie + Yufei, about 2 hours): anonymous sign-in → FastAPI verifies the token → FastAPI broadcasts to a private channel → the browser receives it. This tests risk R3 first. |
 | 2 | Join and chat | PBI-07, 09, 10 join and nicknames. PBI-08, 11 room and chat UI. PBI-12, 14, 15, 16 pipeline steps 3, 6, 7. PBI-13 frontend connected to the APIs. |
 | 3 | Safety, admin, checkpoint | PBI-18 checkpoint on staging, early in the week. PBI-17 connection status. PBI-19, 20 rate limit and warning. PBI-21 admin auth, PBI-22 admin rooms API, PBI-23 admin UI. PBI-24, 25 leave and switch rooms. |
 
-### 10.3 Definition of Done
+### 10.3 Sprint 2 plan
+
+Two weeks is short for 76 points, so Sprint 2 has a committed part and a stretch part. Stretch items start only after the committed work is merged.
+
+| Part | Items | Points |
+|---|---|---|
+| Committed | Must and Should items (PBI-26, 27, 30, 31, 32, 33, 38, 39, 44, 45, 46, 47), plus A2 and B4 (PBI-28, 29, 34, 35) | 52 |
+| Stretch | D3 (PBI-36, 37), E3 (PBI-42, 43), A3 (PBI-40, 41) | 24 |
+
+| Date | Milestone |
+|---|---|
+| Nov 9–10 | Contract PRs: each new endpoint's route and Pydantic models land first, so the frontend builds on the generated types instead of mock data |
+| By Nov 11 | 30-minute architecture walkthrough; each member presents their part |
+| Nov 15 | Every pull request is open |
+| Nov 19 | Internal deadline: at least 90% of the points are merged. Integration checkpoint 2 (PBI-39) on Nov 19–20 |
+| Nov 21–22 | Final acceptance (PBI-46) and release (PBI-47) |
+
+Critical path: reports (PBI-31) → remove or dismiss (PBI-33) → the admin Reports page (PBI-32) → checkpoint 2 (PBI-39) → final acceptance (PBI-46) → release (PBI-47).
+
+Every issue lists the issues it is blocked by. Every member reviews at least two pull requests outside their own area (frontend or backend).
+
+### 10.4 Definition of Done
 
 - The pull request is reviewed and merged according to CONTRIBUTING.md, with all required checks green.
 - The related story's acceptance criteria are checked.
@@ -486,6 +512,7 @@ Every number in this document is defined in exactly one place: a backend setting
 | `HISTORY_LIMIT` / `MESSAGE_RETENTION_DAYS` | 20 messages / 7 days | C3 |
 | `BLOCK_DURATION_OPTIONS_MINUTES` | 15, 60, 1440 | E3 |
 | `SWEEPER_INTERVAL_SECONDS` | 10 | A2 |
+| Presence publisher shutdown grace (backend constant) | 5 seconds | A2, #91 |
 | Admin reports refresh (frontend constant) | 30 seconds | E2 |
 | "Near you" radius / accuracy cutoff / GPS timeout (frontend constants) | 500 m / 1 km / 10 s | A3 |
 | Anonymous sign-ins per IP (Supabase dashboard) | 300 per hour | B1 |
@@ -497,7 +524,7 @@ These platform and board tasks belong to PBI-01, PBI-02, and PBI-05:
 | Where | Task |
 |---|---|
 | Supabase | Create `placechat-staging` in East US (North Virginia). Enable anonymous sign-ins and raise their limit to 300 per hour. Confirm the JWT signing key is ES256. Create the publishable and secret keys. Turn off "Allow public access" in Realtime Settings. Create the admin accounts and their `admin_users` rows. |
-| Render | Create `placechat-api-staging` (free, Virginia, branch `main`, root `backend`, health check `/health`, Python 3.13). Create `placechat-api` (paid) at PBI-45. |
+| Render | Create `placechat-api-staging` (free, Virginia, branch `main`, root `backend`, health check `/health`, Python 3.13). Create `placechat-api` (free, Virginia, branch `release`, same settings) at PBI-45. |
 | Vercel | Import the repository with root directory `frontend`. Set the production branch to `release`, give `main` a fixed staging domain, and set the Preview and Production environment variables. |
 | GitHub | Add the Actions secrets ([Section 9.4](#94-environment-variables)). Extend `protect-main` to cover `release`. Make the three CI jobs required checks once they pass. |
 
@@ -514,3 +541,6 @@ These platform and board tasks belong to PBI-01, PBI-02, and PBI-05:
 | 1.2 | Oct 7, 2026 | A3 refined (Sprint 2): "Near you" section within 500 m, GPS-based location with Wi-Fi/network fallback, approximate distances, automatic sorting once permission is granted. All rooms remain joinable. |
 | 1.3 | Oct 11, 2026 | Moved into the repository as Markdown; this file is now the only maintained copy. Module contracts take `db` as their first argument when they touch the database. Section 10 lists the final assignments only. |
 | 1.4 | Oct 13, 2026 | The migration workflow connects with the session pooler connection string (`supabase db push --db-url`) instead of a Supabase access token and `supabase link`, which needs read access to many unrelated project settings. Its GitHub secrets are now one connection string per environment (Section 9.4). |
+| 1.5 | Nov 8, 2026 | Owners updated to match the delivered Sprint 1 work: `core/realtime`, `publish()`, and the send endpoint are Junhao's (Sections 3.3, 3.4, 7.1). New `GET /admin/rooms`, which lists archived rooms too (Section 7.1). Message history is members-only and returns `is_mine`; new `MESSAGE_NOT_FOUND` error for reports (Sections 7.1, 7.2). Staging-only `CORS_ORIGIN_REGEX` for PR previews (Sections 6.6, 9.4). New dates: Sprint 1 ended Oct 27, Sprint 2 runs Nov 9–22; PBI-37 moved to Junhao; Sprint 2 plan added (Section 10). |
+| 1.6 | Nov 10, 2026 | New `room_presence_counts` table, which stores the last broadcast count per room so unchanged counts are not sent again. Leave and heartbeat take the room lock like join (Sections 5.1, 5.2). Matches PR #85 (PBI-29). |
+| 1.7 | Nov 10, 2026 | Production runs on Render's free instance too, so the project has no costs; open the site about a minute early before demos (Sections 9.1, 9.3, 12). Production migrations run by hand from the `migrate` workflow with target `production`, from the `release` branch, with a dry run first (Section 9.5). |

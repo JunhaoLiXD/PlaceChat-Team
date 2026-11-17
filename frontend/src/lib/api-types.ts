@@ -99,10 +99,79 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    get?: never;
+    /** Get Message History */
+    get: operations["get_message_history_api_v1_rooms__room_id__messages_get"];
     put?: never;
     /** Send Message */
     post: operations["send_message_api_v1_rooms__room_id__messages_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/messages/{message_id}/reports": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Create Message Report */
+    post: operations["create_message_report_api_v1_messages__message_id__reports_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/reports": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Pending Reports */
+    get: operations["list_pending_reports_api_v1_admin_reports_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/reports/{report_id}/remove-message": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Remove Reported Message */
+    post: operations["remove_reported_message_api_v1_admin_reports__report_id__remove_message_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/reports/{report_id}/dismiss": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Dismiss Report */
+    post: operations["dismiss_report_api_v1_admin_reports__report_id__dismiss_post"];
     delete?: never;
     options?: never;
     head?: never;
@@ -165,6 +234,41 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    /**
+     * AdminReportResponse
+     * @description A pending report with the content and room an administrator must review.
+     */
+    AdminReportResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Message Id
+       * Format: uuid
+       */
+      message_id: string;
+      /**
+       * Room Id
+       * Format: uuid
+       */
+      room_id: string;
+      /** Reason */
+      reason: ("harassment" | "spam" | "other") | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "pending" | "removed" | "dismissed";
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      message: components["schemas"]["MessageResponse"];
+      room: components["schemas"]["JoinedRoom"];
+    };
     /** AdminRoomResponse */
     AdminRoomResponse: {
       /**
@@ -252,6 +356,33 @@ export interface components {
       body: string;
     };
     /**
+     * MessageHistoryResponse
+     * @description A history item includes ownership without exposing the sender session id.
+     */
+    MessageHistoryResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Room Id
+       * Format: uuid
+       */
+      room_id: string;
+      /** Nickname */
+      nickname: string;
+      /** Body */
+      body: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Is Mine */
+      is_mine: boolean;
+    };
+    /**
      * MessageResponse
      * @description The broadcast payload and the POST response. Never includes `session_id` (§4).
      */
@@ -270,6 +401,44 @@ export interface components {
       nickname: string;
       /** Body */
       body: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+    };
+    /** ReportCreate */
+    ReportCreate: {
+      /** Reason */
+      reason?: ("harassment" | "spam" | "other") | null;
+    };
+    /**
+     * ReportResponse
+     * @description A report representation that never includes reporter_session_id.
+     */
+    ReportResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Message Id
+       * Format: uuid
+       */
+      message_id: string;
+      /**
+       * Room Id
+       * Format: uuid
+       */
+      room_id: string;
+      /** Reason */
+      reason: ("harassment" | "spam" | "other") | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "pending" | "removed" | "dismissed";
       /**
        * Created At
        * Format: date-time
@@ -495,6 +664,39 @@ export interface operations {
       };
     };
   };
+  get_message_history_api_v1_rooms__room_id__messages_get: {
+    parameters: {
+      query?: {
+        after?: string | null;
+      };
+      header?: never;
+      path: {
+        room_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MessageHistoryResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   send_message_api_v1_rooms__room_id__messages_post: {
     parameters: {
       query?: never;
@@ -518,6 +720,130 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["MessageResponse"];
         };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  create_message_report_api_v1_messages__message_id__reports_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        message_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ReportCreate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ReportResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_pending_reports_api_v1_admin_reports_get: {
+    parameters: {
+      query?: {
+        status?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdminReportResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  remove_reported_message_api_v1_admin_reports__report_id__remove_message_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        report_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  dismiss_report_api_v1_admin_reports__report_id__dismiss_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        report_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       /** @description Validation Error */
       422: {

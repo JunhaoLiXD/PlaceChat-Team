@@ -5,7 +5,7 @@
 their contracts (§3.4); some are still stubs.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session as DbSession
@@ -15,7 +15,7 @@ from app.core.errors import ValidationFailed
 from app.core.realtime import publish
 from app.modules.messaging import repository
 from app.modules.messaging.models import Message
-from app.modules.messaging.schemas import MessageResponse
+from app.modules.messaging.schemas import MessageHistoryResponse, MessageResponse
 from app.modules.rooms.service import ensure_member
 from app.modules.safety.blocks import check_not_blocked
 from app.modules.safety.rate_limit import check_rate_limit
@@ -42,7 +42,7 @@ def send_message(db: DbSession, session_id: str, room_id: UUID, text: str) -> Me
     check_not_blocked(db, session_id)  # 2. not blocked
     body = validate_message(text)  # 3. trimmed, not empty, not too long
     check_rate_limit(db, session_id)  # 4. under the sending limit
-    body = filter_text(body)  # 5. blocked words masked
+    body = filter_text(db, body)  # 5. blocked words masked
 
     message = Message(  # 6. store
         id=uuid4(),
@@ -59,3 +59,28 @@ def send_message(db: DbSession, session_id: str, room_id: UUID, text: str) -> Me
     response = MessageResponse.model_validate(message)
     publish(f"room:{room_id}", "message.created", response.model_dump(mode="json"))
     return response
+
+
+def get_message_history(
+    db: DbSession, session_id: str, room_id: UUID, after_id: UUID | None = None
+) -> list[MessageHistoryResponse]:
+    """Return the caller's visible room history, oldest first."""
+    ensure_member(db, session_id, str(room_id))
+
+    after = repository.get_message(db, room_id, after_id) if after_id is not None else None
+    visible_since = datetime.now(UTC) - timedelta(days=get_settings().message_retention_days)
+    messages = repository.get_recent_messages(
+        db,
+        room_id,
+        get_settings().history_limit,
+        created_after=visible_since,
+        after=after,
+    )
+    caller_id = UUID(session_id)
+    return [
+        MessageHistoryResponse(
+            **MessageResponse.model_validate(message).model_dump(),
+            is_mine=message.session_id == caller_id,
+        )
+        for message in messages
+    ]
