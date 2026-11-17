@@ -68,12 +68,12 @@ export function useRoomChannel(
           .on("broadcast", { event: "message.created" }, ({ payload }) => {
             const message = payload as ChatMessage;
             // Only this room's messages, even if an event arrives on the wrong topic (#20).
-            if (message?.room_id !== roomId) return;
+            if (cancelled || message?.room_id !== roomId) return;
             onMessageRef.current(message);
           })
           .on("broadcast", { event: "message.removed" }, ({ payload }) => {
             const messageId = (payload as { id?: unknown })?.id;
-            if (typeof messageId !== "string") return;
+            if (cancelled || typeof messageId !== "string") return;
             onMessageRemovedRef.current?.(messageId);
           })
           .subscribe((channelState) => {
