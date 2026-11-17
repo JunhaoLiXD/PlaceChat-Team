@@ -287,7 +287,7 @@ FastAPI publishes interactive docs at `/docs`. The frontend generates its TypeSc
 | `GET /admin/reports?status=pending` | Pending reports with message, room, and time | E2 | Yufei |
 | `POST /admin/reports/{id}/remove-message` · `POST /admin/reports/{id}/dismiss` | Handle a report. Removing a message also resolves its other pending reports. | E2 | Yufei |
 | `POST /admin/blocks` | Block the sender of a reported message: `report_id` plus `duration_minutes` (15, 60, or 1440) | E3 | Zhijie |
-| `GET` · `POST` · `DELETE /admin/blocked-words` | Maintain the word list | D3 | Junhao |
+| `GET` · `POST /admin/blocked-words` · `DELETE /admin/blocked-words/{id}` | Maintain the word list. Words are stored trimmed and lowercase; adding one already on the list returns `VALIDATION_FAILED`; deleting a word that is already gone succeeds. Changes apply to the next message. | D3 | Junhao |
 | `GET /health` (no token, no prefix) | Health check for Render | — | Junhao |
 
 ### 7.2 Error format
