@@ -160,7 +160,7 @@ These signatures exist in the code as stubs (PBI-01). Each owner replaces their 
 | `ensure_member(db, session_id, room_id) -> Membership` (404 if the room is not active, 403 if not joined) | Zhijie | Messaging pipeline |
 | `check_not_blocked(db, session_id)` raises `Blocked(until)`; a no-op stub until PBI-42 | Zhijie | Messaging pipeline |
 | `check_rate_limit(db, session_id)` raises `RateLimited(retry_after)` | Yufei | Messaging pipeline |
-| `filter_text(text) -> str`; returns the text unchanged until PBI-36 | Yufei | Messaging pipeline |
+| `filter_text(db, text) -> str`; masks configured blocked words case-insensitively | Yufei | Messaging pipeline |
 | `publish(topic, event, payload)` | Junhao | Messaging, rooms, admin |
 
 ## 4. Message pipeline

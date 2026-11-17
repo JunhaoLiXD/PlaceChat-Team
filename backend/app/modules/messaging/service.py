@@ -42,7 +42,7 @@ def send_message(db: DbSession, session_id: str, room_id: UUID, text: str) -> Me
     check_not_blocked(db, session_id)  # 2. not blocked
     body = validate_message(text)  # 3. trimmed, not empty, not too long
     check_rate_limit(db, session_id)  # 4. under the sending limit
-    body = filter_text(body)  # 5. blocked words masked
+    body = filter_text(db, body)  # 5. blocked words masked
 
     message = Message(  # 6. store
         id=uuid4(),
