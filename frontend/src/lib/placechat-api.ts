@@ -82,8 +82,8 @@ export async function listRooms(): Promise<RoomSummary[]> {
   });
 }
 
-// Shared across component/Activity visits in this tab, as in PR #95. Finish an
-// earlier Leave before a later Join can establish the same room's membership.
+// Survive component/Activity remounts in this tab. A delayed Leave must finish
+// before a later join can create the next visit's membership in the same room.
 const membershipRequests = new Map<string, Promise<void>>();
 
 function queueMembershipChange<T>(

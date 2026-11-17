@@ -26,6 +26,24 @@ Client code can call `ensureSession()` from `src/lib/session.ts` to reuse the st
 
 Call `getAccessToken()` immediately before each authenticated API request rather than keeping an access token in component state; `apiFetch(path, { auth: true })` in `src/lib/placechat-api.ts` does this for you. Public room-list requests do not need a token. These helpers require the frontend Supabase URL and publishable key from `.env.local`; never use a backend secret key.
 
+Opening `/rooms/[roomId]` loads that room and rejoins with the persisted session, displaying the nickname returned by the backend. Refreshing, closing/reopening a tab in the same browser profile, disconnecting, and React cleanup never sign out, clear stored authentication, or send Leave. The backend retains a nickname through exactly 60 seconds after the last successful join/heartbeat while `left_at` is null; after that, it assigns a different name. A different browser profile/private session has its own identity.
+
+Each room visit enables Send and starts one 15-second heartbeat only after its own join succeeds, even when a kept-alive Activity preserves an old nickname and draft. Direct submissions are also guarded. A failed join shows its error and keeps sending/heartbeats disabled. Cleanup stops the timer and unsubscribes from Realtime; cancelled joins/history and late channel events are ignored. Count-only updates do not rejoin.
+
+Leave and the All rooms/Back link stop local activity and navigate immediately, even while a join is stalled. Explicit membership cleanup continues with errors handled. Joins and explicit Leaves are ordered per room within the tab, across component/Activity remounts, so an old Leave finishes before a newer join can establish membership. A return to the same room waits for earlier membership requests to settle; Send stays disabled while waiting, and Leave/Back remains usable. Failed cleanup does not block later joins. React cleanup itself never sends Leave, and returning never clears Supabase authentication.
+
+### PBI-34 staging checklist
+
+All live checks below are **pending** until the reviewed change reaches staging; automated tests use mocked Auth/Realtime and do not replace these checks. Use staging's real backend, the same browser profile for returns, and a second independent profile/private session for competing joins. Measure gaps from the last successful heartbeat in Network tools, rather than from tab closure, and keep other tabs for that identity closed so they cannot refresh the hold.
+
+- [ ] **Pending:** Open a room URL, note its nickname, refresh, and confirm the same room/nickname, working messages/history, and continued 15-second heartbeats. No Leave or anonymous sign-in request should occur during refresh.
+- [ ] **Pending:** Close the tab and reopen the same URL within 60 seconds of its last successful heartbeat. Confirm the same Supabase identity and backend-returned nickname without a new anonymous sign-in.
+- [ ] **Pending:** Close/disconnect the participant beyond 60 seconds since its last heartbeat (for example, 61 seconds); reopen the room URL and confirm a different nickname. Presence may have expired after 30 seconds without ending membership or releasing the nickname early.
+- [ ] **Pending:** Click Leave, return to the room immediately, and confirm a different nickname with the same Supabase session. Repeat via All rooms/Back, switch rooms, and revisit a kept-alive room; messages, subscriptions, and heartbeats should work once per active visit.
+- [ ] **Pending:** With a preserved draft, return to a kept-alive room after 61 seconds while the rejoin is delayed. Confirm Send and Enter cannot submit until this visit joins; reject the rejoin and confirm its error is visible with sending/heartbeats disabled.
+- [ ] **Pending:** Stall the initial join, then click Leave or All rooms/Back. Confirm navigation completes immediately. Return quickly while old requests remain pending: the new join waits for old cleanup, Leave/Back remains usable, and only the new successful visit starts a heartbeat. Check a failed cleanup too.
+- [ ] **Pending:** With the first session absent for 59 seconds (also check the inclusive 60-second boundary), join from the second session and confirm it cannot take the held nickname. After expiration or explicit Leave, the released name is available to that other session. Allocation is random, so a browser run alone cannot force reuse; the deterministic backend tests verify eligibility and the exact boundary.
+
 ## Live messages
 
 `useRoomChannel(roomId, onMessage, onMessageRemoved?, onStatus?)` in `src/lib/use-room-channel.ts` joins the room's private Realtime channel and returns its status. Removal remains the third callback from #96; the fourth reports status synchronously so recovery freezes its cursor before batched live arrivals. `useConnectionBanner(status, roomId)` turns that status into the "Connection lost" / "Reconnected" banner. With `NEXT_PUBLIC_USE_MOCKS=true` the chat room uses sample data and does not connect.
@@ -52,13 +70,11 @@ These live checks have not been run. Use a frontend running this branch and its 
 - [ ] From another tab sharing A's session, send messages while A is offline and scrolled upward. On recovery these historical own messages retain ownership styling, preserve scrolling and show the new-message indicator. A newly submitted message in A still scrolls normally, even if its live echo arrives first.
 - [ ] Delay a Leave response, navigate with Leave/Back, and quickly return to that room. Navigation is immediate; the new Join waits for cleanup, then sending and one heartbeat resume. Repeat with a pending initial Join and failed cleanup; another room's Join must stay independent.
 
-#### Parallel PR overlap
+#### Combined PBI-34 and PBI-35 behavior
 
-This branch merges current `origin/main`, including #96, #97 and #99. PR #95 remains independent. After either feature PR merges, merge the new `main` into the other and reconcile these overlaps:
+This branch merges current `origin/main`, including #95's persisted-session nickname rules, #96's visible history/7-day retention and removals, #97's asynchronous count publisher, #99's reporting/auth/API changes, #100's report moderation and #101's word filter. The component shares one visit guard for sending readiness, heartbeat and recovery; `placechat-api.ts` provides the canonical per-room Join/Leave queue. The recovery controller owns removed IDs for history, send responses and live echoes. In `useRoomChannel` and its callers, `onMessageRemoved` is third and synchronous `onStatus` is fourth. History failures leave the joined nickname and sending controls available while offering bounded retries.
 
-- PR #95/PBI-34: `src/components/chat-room.tsx`, `src/lib/placechat-api.ts`, `src/lib/use-room-channel.ts`, `__tests__/use-room-channel.test.ts` and this README. Retain one per-room Join/Leave queue and heartbeat, both PRs' cleanup/stale-result guards, #98's recovery/ownership/scrolling and #95's backend nickname-allocation fix. That backend feature is not included here. Keep removal third and status fourth in the hook signature and all call sites.
-- Merged PR #96/PBI-27: the component, hook and hook tests conflicted. Both callback/test sets are retained, including visibility/retention and removal during recovery. Merged #97's asynchronous count publisher and #99's reporting/auth/API changes are also retained without feature edits.
-- Combined live refresh, Leave/switch and two-session reconnect checks remain pending after integration; all unchecked staging steps above still apply.
+Combined live refresh, expiration, Leave/switch and two-session reconnect checks remain pending; all unchecked staging steps above still apply. PR #102's dependency upgrade is separate until it merges into `main`; a security-blocked build must be reported without disabling the check.
 
 ## API types
 

@@ -12,6 +12,14 @@ from app.core.db import Base
 ReportStatus = Literal["pending", "removed", "dismissed"]
 
 
+class BlockedWord(Base):
+    __tablename__ = "blocked_words"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    word: Mapped[str] = mapped_column(Text, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Report(Base):
     __tablename__ = "reports"
     __table_args__ = (UniqueConstraint("message_id", "reporter_session_id"),)

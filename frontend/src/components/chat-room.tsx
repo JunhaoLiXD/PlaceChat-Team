@@ -249,6 +249,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     nickname: string;
   } | null>(null);
   const nickname = identity?.roomId === room.id ? identity.nickname : null;
+  // A saved nickname is not proof that the current Activity visit has joined.
   const [hasJoined, setHasJoined] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -292,7 +293,12 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
 
   const channelStatus = useRoomChannel(
     mockMode || isLeaving ? null : room.id,
-    (message) => visitRef.current?.recovery.add([message]),
+    (message) => {
+      const visit = visitRef.current;
+      if (!visit?.active || visit.roomId !== room.id) return;
+      // Recovery owns the removal tombstones for history, sends and live echoes.
+      visit.recovery.add([message]);
+    },
     (messageId) => {
       const visit = visitRef.current;
       if (!visit?.active || visit.roomId !== room.id) return;
@@ -301,7 +307,11 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
         current.filter((message) => message.id !== messageId),
       );
     },
-    (status) => visitRef.current?.recovery.status(status),
+    (status) => {
+      const visit = visitRef.current;
+      if (!visit?.active || visit.roomId !== room.id) return;
+      visit.recovery.status(status);
+    },
   );
   const badge = CONNECTION_BADGES[mockMode ? "demo" : channelStatus];
   const banner = useConnectionBanner(channelStatus, room.id);
@@ -335,12 +345,13 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
       },
     };
     visitRef.current = visit;
+    const request = joinRoom(room.id);
 
     // This also runs when Next shows a kept-alive page again (React <Activity>),
     // so a Leave from the earlier visit must not keep the controls disabled.
     async function join() {
       try {
-        const result = await joinRoom(room.id);
+        const result = await request;
         if (!visit.active) return;
         visit.joined = true;
         setIdentity({ roomId: room.id, nickname: result.nickname });
@@ -374,6 +385,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
       // 60-second hold from last_seen_at; only explicit navigation sends Leave.
       visit.stop();
       if (visitRef.current === visit) visitRef.current = null;
+      setJoinError(null);
       setIsLeaving(false);
       setHistoryError(null);
     };
@@ -428,8 +440,8 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     }
   };
 
-  // Leave frees the nickname right away (§5.2). Unmounting the page then closes the
-  // channel and stops the heartbeat, so no more messages arrive from this room.
+  // Stop local activity and navigate now; ordered membership cleanup continues
+  // even while a join or Leave response is stalled.
   const handleLeave = (event?: MouseEvent) => {
     event?.preventDefault();
     const visit = visitRef.current;
@@ -502,15 +514,17 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
         <section className="flex min-h-[calc(100vh-5.5rem)] flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 shadow-xl shadow-slate-200/70 sm:min-h-[calc(100vh-7rem)]">
           <div className="flex min-h-14 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 sm:px-6">
             <div className="min-w-0">
-              {hasJoined && nickname ? (
+              {joinError ? (
+                <p role="alert" className="text-sm text-slate-500">
+                  {joinError}
+                </p>
+              ) : hasJoined && nickname ? (
                 <p className="truncate text-sm text-slate-600">
                   You are{" "}
                   <span className="font-bold text-slate-950">{nickname}</span>
                 </p>
               ) : (
-                <p className="text-sm text-slate-500">
-                  {joinError ?? "Finding your nickname…"}
-                </p>
+                <p className="text-sm text-slate-500">Finding your nickname…</p>
               )}
             </div>
             <div

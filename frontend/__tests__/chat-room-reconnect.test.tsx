@@ -936,3 +936,109 @@ test("Activity retains sent-message ownership without treating recovered history
       .ownMessage,
   ).toBe("true");
 });
+
+test.each([false, true])(
+  "Activity rejoin gates a preserved draft and recovery on the new nickname (history fails: %s)",
+  async (historyFails) => {
+    const page = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <ChatRoom room={room} />
+      </Activity>
+    );
+    const view = render(page("visible"));
+    await settle();
+    await settle(() => emit("SUBSCRIBED"));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "preserved draft" },
+    });
+    const oldChannel = currentChannel();
+    await settle(() => view.rerender(page("hidden")));
+    await advance(61_000);
+    expect(heartbeats()).toHaveLength(0);
+
+    // The backend decides expiration; emulate its different returned nickname.
+    const rejoin = deferred<Response>();
+    fetchMock.mockImplementationOnce(() => rejoin.promise);
+    if (historyFails) history.mockRejectedValueOnce(new Error("history down"));
+    history.mockResolvedValueOnce([
+      message("removed-on-return", 2, true),
+      message("returned-own", 3, true),
+    ]);
+    await settle(() => view.rerender(page("visible")));
+    const input = screen.getByRole("textbox");
+    expect(input).toHaveProperty("value", "preserved draft");
+    await settle(() => {
+      emit("SUBSCRIBED");
+      emit("CHANNEL_ERROR");
+      emit("SUBSCRIBED");
+      remove("removed-on-return");
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.submit(input.closest("form")!);
+    });
+    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(history).toHaveBeenCalledTimes(1);
+    expect(send).not.toHaveBeenCalled();
+    await advance(15_000);
+    expect(heartbeats()).toHaveLength(0);
+
+    await settle(() =>
+      rejoin.resolve(json({ room, nickname: "New Backend Fox" })),
+    );
+    expect(screen.getByText("New Backend Fox")).toBeDefined();
+    expect(screen.queryByText("Backend Otter")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    if (historyFails) {
+      expect(
+        screen
+          .getByText(/Some messages could not be loaded/)
+          .getAttribute("role"),
+      ).toBe("alert");
+      // History failure cannot turn a successful Join into a nickname error.
+      await advance(1_000);
+      expect(screen.getByText("New Backend Fox")).toBeDefined();
+    }
+    expect(screen.queryByText("removed-on-return")).toBeNull();
+    expect(
+      screen.getByText("returned-own", { selector: "p" }).closest("article")
+        ?.dataset.ownMessage,
+    ).toBe("true");
+
+    await settle(() => {
+      live(message("late-old-visit", 9), oldChannel);
+      remove("returned-own", oldChannel);
+      emit("SUBSCRIBED", oldChannel);
+      fireEvent.submit(input.closest("form")!);
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("late-old-visit")).toBeNull();
+    history.mockResolvedValueOnce([message("missed-after-return", 5)]);
+    await settle(() => {
+      emit("CHANNEL_ERROR");
+      emit("SUBSCRIBED");
+    });
+    expect(history).toHaveBeenLastCalledWith(room.id, "own");
+    expect(bodies()).toEqual([
+      "m1",
+      "returned-own",
+      "own",
+      "missed-after-return",
+    ]);
+    await advance(15_000);
+    expect(heartbeats()).toHaveLength(1);
+    expect(joins()).toHaveLength(2);
+    expect(fake.channels.filter((channel) => !channel.removed)).toHaveLength(1);
+    expect(leaves()).toHaveLength(0);
+    expect(fake.client.auth.signInAnonymously).not.toHaveBeenCalled();
+    expect(fake.client.auth.signOut).not.toHaveBeenCalled();
+    for (const [, init] of fetchMock.mock.calls)
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        "Bearer persisted-token",
+      );
+  },
+);

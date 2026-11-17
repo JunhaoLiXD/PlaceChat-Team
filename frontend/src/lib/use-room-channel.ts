@@ -25,6 +25,8 @@ const STATUS_BY_STATE: Record<string, RoomChannelStatus> = {
  * browser can only receive. After an error, supabase-js rejoins on its own
  * with backoff (this also covers the `MissingPartition` error seen in spike
  * #30), and the status goes back to "subscribed" when it succeeds.
+ * Removal is the third callback; the fourth reports status synchronously so
+ * recovery can freeze its cursor before live arrivals in the same React batch.
  *
  * Pass `null` to stay disconnected (mock data mode has no Supabase project).
  */
