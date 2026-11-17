@@ -6,6 +6,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from app.modules.messaging.schemas import MessageResponse
+from app.modules.rooms.schemas import JoinedRoom
+
 ReportReason = Literal["harassment", "spam", "other"]
 ReportStatus = Literal["pending", "removed", "dismissed"]
 
@@ -27,3 +30,10 @@ class ReportResponse(BaseModel):
     reason: ReportReason | None
     status: ReportStatus
     created_at: datetime
+
+
+class AdminReportResponse(ReportResponse):
+    """A pending report with the content and room an administrator must review."""
+
+    message: MessageResponse
+    room: JoinedRoom
