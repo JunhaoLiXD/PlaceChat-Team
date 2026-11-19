@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -135,4 +136,191 @@ test("a reader who scrolled up gets a new-message button", async () => {
   expect(
     await screen.findByRole("button", { name: /1 new message/i }),
   ).toBeDefined();
+});
+
+test("missed messages inserted before an existing own message do not pull a reader down", async () => {
+  const first: ChatMessage = {
+    id: "first",
+    room_id: room.id,
+    nickname: "Calm Fox",
+    body: "First",
+    created_at: "2026-10-13T13:42:00-04:00",
+  };
+  const own = {
+    ...first,
+    id: "own",
+    body: "Mine",
+    created_at: "2026-10-13T13:44:00-04:00",
+  };
+  const missed = {
+    ...first,
+    id: "missed",
+    body: "Missed",
+    created_at: "2026-10-13T13:43:00-04:00",
+  };
+  const ids = new Set([own.id]);
+  const view = render(
+    <MessageFeed messages={[first, own]} ownMessageIds={ids} />,
+  );
+  const scrollRegion = screen.getByTestId("message-scroll-region");
+  Object.defineProperties(scrollRegion, {
+    clientHeight: { configurable: true, value: 200 },
+    scrollHeight: { configurable: true, value: 1000 },
+    scrollTop: { configurable: true, value: 100 },
+  });
+  fireEvent.scroll(scrollRegion);
+  view.rerender(
+    <MessageFeed messages={[first, missed, own]} ownMessageIds={ids} />,
+  );
+  expect(
+    await screen.findByRole("button", { name: /1 new message/i }),
+  ).toBeDefined();
+  expect(scrollRegion.scrollTop).toBe(100);
+});
+
+test("regression: recovered own history, including another tab's messages, preserves scrolling", async () => {
+  vi.useFakeTimers();
+  try {
+    const first: ChatMessage = {
+      id: "first",
+      room_id: room.id,
+      nickname: "Calm Fox",
+      body: "First",
+      created_at: "2026-10-13T13:42:00-04:00",
+    };
+    const history = {
+      ...first,
+      id: "other-tab",
+      body: "My history",
+      is_mine: true,
+    };
+    const view = render(
+      <MessageFeed messages={[first]} ownMessageIds={new Set()} />,
+    );
+    const region = screen.getByTestId("message-scroll-region");
+    const scrollTo = vi.fn();
+    Object.defineProperties(region, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, value: 100 },
+      scrollTo: { configurable: true, value: scrollTo },
+    });
+    fireEvent.scroll(region);
+    view.rerender(
+      <MessageFeed messages={[first, history]} ownMessageIds={new Set()} />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(16);
+    });
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(region.scrollTop).toBe(100);
+    expect(
+      screen.getByRole("button", { name: /1 new message/i }),
+    ).toBeDefined();
+    expect(
+      screen.getByText("My history").closest("article")?.dataset.ownMessage,
+    ).toBe("true");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test.each(["response first", "live first"])(
+  "this visit's actual submission scrolls to the message (%s)",
+  async (order) => {
+    vi.useFakeTimers();
+    try {
+      const first: ChatMessage = {
+        id: "first",
+        room_id: room.id,
+        nickname: "Calm Fox",
+        body: "First",
+        created_at: "2026-10-13T13:42:00-04:00",
+      };
+      const own = { ...first, id: "submitted", body: "Submitted" };
+      const view = render(
+        <MessageFeed messages={[first]} ownMessageIds={new Set()} />,
+      );
+      const region = screen.getByTestId("message-scroll-region");
+      const scrollTo = vi.fn();
+      Object.defineProperties(region, {
+        clientHeight: { configurable: true, value: 200 },
+        scrollHeight: { configurable: true, value: 1000 },
+        scrollTop: { configurable: true, value: 100 },
+        scrollTo: { configurable: true, value: scrollTo },
+      });
+      fireEvent.scroll(region);
+      if (order === "live first") {
+        view.rerender(
+          <MessageFeed messages={[first, own]} ownMessageIds={new Set()} />,
+        );
+        expect(
+          screen.getByRole("button", { name: /1 new message/i }),
+        ).toBeDefined();
+      }
+      view.rerender(
+        <MessageFeed
+          messages={[first, own]}
+          ownMessageIds={new Set([own.id])}
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(16);
+      });
+      expect(scrollTo).toHaveBeenCalledExactlyOnceWith({
+        top: 1000,
+        behavior: "smooth",
+      });
+      expect(screen.queryByRole("button", { name: /new message/i })).toBeNull();
+      expect(
+        screen.getByText("Submitted").closest("article")?.dataset.ownMessage,
+      ).toBe("true");
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+test("Activity cleanup cancels the previous visit's pending scroll", async () => {
+  vi.useFakeTimers();
+  try {
+    const first: ChatMessage = {
+      id: "first",
+      room_id: room.id,
+      nickname: "Calm Fox",
+      body: "First",
+      created_at: "2026-10-13T13:42:00-04:00",
+    };
+    const own = { ...first, id: "submitted", body: "Submitted", is_mine: true };
+    const page = (
+      mode: "visible" | "hidden",
+      messages: ChatMessage[],
+      submitted = new Set<string>(),
+    ) => (
+      <Activity mode={mode}>
+        <MessageFeed messages={messages} ownMessageIds={submitted} />
+      </Activity>
+    );
+    const view = render(page("visible", [first]));
+    const region = screen.getByTestId("message-scroll-region");
+    const scrollTo = vi.fn();
+    Object.defineProperties(region, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, value: 100 },
+      scrollTo: { configurable: true, value: scrollTo },
+    });
+    fireEvent.scroll(region);
+    view.rerender(page("visible", [first, own], new Set([own.id])));
+    view.rerender(page("hidden", [first, own]));
+    view.rerender(page("visible", [first, own]));
+    fireEvent.scroll(region);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(16);
+    });
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(region.scrollTop).toBe(100);
+  } finally {
+    vi.useRealTimers();
+  }
 });

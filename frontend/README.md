@@ -48,15 +48,37 @@ All live checks below are **pending** until the reviewed change reaches staging;
 - [ ] **Pending:** Stall the initial join, then click Leave or All rooms/Back. Confirm navigation completes immediately. Return quickly while old requests remain pending: the new join waits for old cleanup, Leave/Back remains usable, and only the new successful visit starts a heartbeat. Check a failed cleanup too.
 - [ ] **Pending:** With the first session absent for 59 seconds (also check the inclusive 60-second boundary), join from the second session and confirm it cannot take the held nickname. After expiration or explicit Leave, the released name is available to that other session. Allocation is random, so a browser run alone cannot force reuse; the deterministic backend tests verify eligibility and the exact boundary.
 
-### Integration with PR #98
-
-This branch merges current `origin/main`, including #96's visible history/7-day retention and `message.removed` handling, #97's asynchronous count publisher, and #99's reporting/auth/API changes. Removed IDs stay hidden if an earlier history request, send response or live echo arrives later; callbacks from closed channels are ignored.
-
-PR #98/PBI-35 remains independent. Both PRs edit `src/components/chat-room.tsx`, `src/lib/placechat-api.ts`, `src/lib/use-room-channel.ts`, `__tests__/use-room-channel.test.ts` and this README. The per-room Join/Leave queue and explicit-Leave/cleanup rules agree. After either PR merges, merge the new `main` into the other and retain one queue, one heartbeat per joined visit, #95's backend nickname allocation and #98's frozen-cursor recovery/ownership/scrolling. Keep `onMessageRemoved` as the third hook callback and #98's `onStatus` as the fourth; do not replace either callback with the other. The combined live refresh, Leave/switch and reconnect checks remain pending.
-
 ## Live messages
 
-`useRoomChannel(roomId, onMessage, onMessageRemoved?)` in `src/lib/use-room-channel.ts` joins the room's private Realtime channel, receives created/removed messages and returns its status; `useConnectionBanner(status)` turns that status into the "Connection lost" / "Reconnected" banner. With `NEXT_PUBLIC_USE_MOCKS=true` the chat room uses sample data and does not connect.
+`useRoomChannel(roomId, onMessage, onMessageRemoved?, onStatus?)` in `src/lib/use-room-channel.ts` joins the room's private Realtime channel and returns its status. Removal remains the third callback from #96; the fourth reports status synchronously so recovery freezes its cursor before batched live arrivals. `useConnectionBanner(status, roomId)` turns that status into the "Connection lost" / "Reconnected" banner. With `NEXT_PUBLIC_USE_MOCKS=true` the chat room uses sample data and does not connect.
+
+### Reconnect recovery (PBI-35)
+
+Supabase owns automatic channel reconnection. After a previously subscribed room loses its connection and resubscribes, the chat fetches `getRoomMessages(roomId, lastId)`. The room visit freezes that cursor synchronously before the gap; live events and delayed send responses cannot move it until history succeeds. With no verified cursor, it requests recent history instead. Initial/duplicate subscription statuses and participant-count updates do not start catch-up or rejoin.
+
+History, live events and send responses use `mergeMessages` for unique IDs, chronological order and preserved ownership. `message.removed` immediately hides a message and records its ID for the visit, preventing delayed history, send responses or live echoes from restoring it. A removed cursor still resolves on the server and does not move the frozen pre-gap cursor. Recovery makes one request plus at most two retries (after 1 and 3 seconds), retains the original cursor after failures or another drop, and offers **Retry messages** if necessary. Requests are serialized within a visit. Each response follows the server's visibility, 7-day retention and newest-20 contract from #96; the frontend does not paginate into older history. Late results from Leave, another room or effect cleanup are ignored.
+
+One 15-second heartbeat per successful join continues with the persisted Supabase session and backend-returned nickname, retrying missed HTTP heartbeats on the next tick. Reconnection does not join again or allocate a name. The 60-second hold remains measured by the server from `last_seen_at`. Explicit Leave/All rooms stops recovery and the heartbeat and navigates immediately. Join/Leave requests are ordered per room across visits/remounts: cleanup follows even a pending Join, later Joins wait until it settles, and failures release the queue. Other rooms remain independent. Refresh, unmount, StrictMode and Activity cleanup only stop local work and unsubscribe, without Leave or sign-out.
+
+Scrolled-up readers retain their position when catch-up inserts earlier messages, including `is_mine` history sent from another tab. Ownership alone never triggers sending-related scrolling. Only submissions acknowledged in the current visit scroll a reader to the bottom, including when the live echo precedes its POST response. Ownership rendering survives Activity returns independently of the current visit's submission IDs.
+
+#### Two-session, 20-second offline check — pending
+
+These live checks have not been run. Use a frontend running this branch and its matching authorized backend/Supabase project:
+
+- [ ] Open the same room in two independent browser profiles, A and B. Record A's backend nickname and a last message ID; confirm A sends one authenticated heartbeat every 15 seconds.
+- [ ] Immediately after a successful A heartbeat, put A offline for about 20 seconds. B sends several distinct messages during the interruption. A shows the lost-connection banner.
+- [ ] Restore A's connection. Check automatic resubscription, the Reconnected banner, and one history request using the ID from before the gap (recent history if empty). Every missed message in the server's newest-20 window appears once, chronologically, with correct ownership even if a live message arrives first.
+- [ ] A retains the same nickname and persisted session, and one heartbeat resumes on the next 15-second tick without another anonymous sign-in or reconnect join. The hold starts at the last successful heartbeat, not at the moment the browser goes offline.
+- [ ] Scroll A upward before another short interruption and confirm recovery does not pull it down. Refresh within the hold: history/nickname return, one heartbeat runs, and refresh/cleanup sends no Leave. Explicit Leave/All rooms stops local work and sends Leave.
+- [ ] From another tab sharing A's session, send messages while A is offline and scrolled upward. On recovery these historical own messages retain ownership styling, preserve scrolling and show the new-message indicator. A newly submitted message in A still scrolls normally, even if its live echo arrives first.
+- [ ] Delay a Leave response, navigate with Leave/Back, and quickly return to that room. Navigation is immediate; the new Join waits for cleanup, then sending and one heartbeat resume. Repeat with a pending initial Join and failed cleanup; another room's Join must stay independent.
+
+#### Combined PBI-34 and PBI-35 behavior
+
+This branch merges current `origin/main`, including #95's persisted-session nickname rules, #96's visible history/7-day retention and removals, #97's asynchronous count publisher, #99's reporting/auth/API changes, #100's report moderation and #101's word filter. The component shares one visit guard for sending readiness, heartbeat and recovery; `placechat-api.ts` provides the canonical per-room Join/Leave queue. The recovery controller owns removed IDs for history, send responses and live echoes. In `useRoomChannel` and its callers, `onMessageRemoved` is third and synchronous `onStatus` is fourth. History failures leave the joined nickname and sending controls available while offering bounded retries.
+
+Combined live refresh, expiration, Leave/switch and two-session reconnect checks remain pending; all unchecked staging steps above still apply. PR #102's dependency upgrade is separate until it merges into `main`; a security-blocked build must be reported without disabling the check.
 
 ## API types
 

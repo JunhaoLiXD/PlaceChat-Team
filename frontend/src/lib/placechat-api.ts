@@ -131,6 +131,7 @@ function queueMembershipChange<T>(
 ): Promise<T> {
   const previous = membershipRequests.get(roomId) ?? Promise.resolve();
   const request = previous.then(change);
+  // A failed cleanup must release the queue for the next visit too.
   const settled = request.then(
     () => undefined,
     () => undefined,
