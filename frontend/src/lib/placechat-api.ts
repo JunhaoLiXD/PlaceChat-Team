@@ -5,6 +5,7 @@ import type {
   AdminRoomCreate,
   AdminRoomUpdate,
   ApiErrorBody,
+  BlockedWord,
   ChatMessage,
   HistoryMessage,
   JoinRoomResult,
@@ -70,6 +71,9 @@ async function apiFetch<T>(
     );
   }
 
+  // 204 No Content (for example DELETE) has no body to parse.
+  if (response.status === 204) return undefined as T;
+
   return (await response.json()) as T;
 }
 
@@ -117,6 +121,28 @@ export async function updateAdminRoom(
 export async function archiveAdminRoom(roomId: string): Promise<AdminRoom> {
   return apiFetch<AdminRoom>(`/api/v1/admin/rooms/${roomId}/archive`, {
     method: "POST",
+    auth: true,
+  });
+}
+
+export async function listBlockedWords(): Promise<BlockedWord[]> {
+  return apiFetch<BlockedWord[]>("/api/v1/admin/blocked-words", {
+    auth: true,
+    cache: "no-store",
+  });
+}
+
+export async function addBlockedWord(word: string): Promise<BlockedWord> {
+  return apiFetch<BlockedWord>("/api/v1/admin/blocked-words", {
+    method: "POST",
+    body: JSON.stringify({ word }),
+    auth: true,
+  });
+}
+
+export async function deleteBlockedWord(wordId: string): Promise<void> {
+  await apiFetch<void>(`/api/v1/admin/blocked-words/${wordId}`, {
+    method: "DELETE",
     auth: true,
   });
 }

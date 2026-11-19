@@ -6,6 +6,11 @@ import { useState } from "react";
 
 import { signOutAdmin } from "@/lib/admin-auth";
 
+const ADMIN_LINKS = [
+  { href: "/admin/rooms", label: "Rooms" },
+  { href: "/admin/words", label: "Words" },
+];
+
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -40,16 +45,25 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             </Link>
 
             {!isLogin ? (
-              <nav aria-label="Admin navigation" className="hidden sm:block">
-                <Link
-                  href="/admin/rooms"
-                  aria-current={
-                    pathname === "/admin/rooms" ? "page" : undefined
-                  }
-                  className="rounded-lg bg-white/10 px-3 py-2 text-sm font-semibold text-white transition hover:bg-white/15 focus-visible:outline-2 focus-visible:outline-violet-400"
-                >
-                  Rooms
-                </Link>
+              <nav
+                aria-label="Admin navigation"
+                className="hidden items-center gap-1 sm:flex"
+              >
+                {ADMIN_LINKS.map((link) => {
+                  const isCurrent = pathname === link.href;
+                  return (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      aria-current={isCurrent ? "page" : undefined}
+                      className={`rounded-lg px-3 py-2 text-sm font-semibold transition hover:bg-white/15 focus-visible:outline-2 focus-visible:outline-violet-400 ${
+                        isCurrent ? "bg-white/10 text-white" : "text-slate-300"
+                      }`}
+                    >
+                      {link.label}
+                    </Link>
+                  );
+                })}
               </nav>
             ) : null}
           </div>
