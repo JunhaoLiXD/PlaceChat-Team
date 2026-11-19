@@ -1,6 +1,9 @@
 import { MOCK_ROOMS } from "@/lib/mock-data";
 import { publicConfig, shouldUseMocks } from "@/lib/config";
 import type {
+  AdminRoom,
+  AdminRoomCreate,
+  AdminRoomUpdate,
   ApiErrorBody,
   ChatMessage,
   HistoryMessage,
@@ -82,6 +85,42 @@ export async function listRooms(): Promise<RoomSummary[]> {
   });
 }
 
+/** Admin operations always use the real protected API, even in local mock mode. */
+export async function listAdminRooms(): Promise<AdminRoom[]> {
+  return apiFetch<AdminRoom[]>("/api/v1/admin/rooms", {
+    auth: true,
+    cache: "no-store",
+  });
+}
+
+export async function createAdminRoom(
+  room: AdminRoomCreate,
+): Promise<AdminRoom> {
+  return apiFetch<AdminRoom>("/api/v1/admin/rooms", {
+    method: "POST",
+    body: JSON.stringify(room),
+    auth: true,
+  });
+}
+
+export async function updateAdminRoom(
+  roomId: string,
+  changes: AdminRoomUpdate,
+): Promise<AdminRoom> {
+  return apiFetch<AdminRoom>(`/api/v1/admin/rooms/${roomId}`, {
+    method: "PATCH",
+    body: JSON.stringify(changes),
+    auth: true,
+  });
+}
+
+export async function archiveAdminRoom(roomId: string): Promise<AdminRoom> {
+  return apiFetch<AdminRoom>(`/api/v1/admin/rooms/${roomId}/archive`, {
+    method: "POST",
+    auth: true,
+  });
+}
+
 // Survive component/Activity remounts in this tab. A delayed Leave must finish
 // before a later join can create the next visit's membership in the same room.
 const membershipRequests = new Map<string, Promise<void>>();
@@ -92,6 +131,7 @@ function queueMembershipChange<T>(
 ): Promise<T> {
   const previous = membershipRequests.get(roomId) ?? Promise.resolve();
   const request = previous.then(change);
+  // A failed cleanup must release the queue for the next visit too.
   const settled = request.then(
     () => undefined,
     () => undefined,
