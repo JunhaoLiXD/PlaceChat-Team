@@ -26,6 +26,10 @@ Client code can call `ensureSession()` from `src/lib/session.ts` to reuse the st
 
 Call `getAccessToken()` immediately before each authenticated API request rather than keeping an access token in component state; `apiFetch(path, { auth: true })` in `src/lib/placechat-api.ts` does this for you. Public room-list requests do not need a token. These helpers require the frontend Supabase URL and publishable key from `.env.local`; never use a backend secret key.
 
+## Administrator console
+
+Provisioned administrators sign in with email and password at `/admin/login`. The login form uses Supabase Auth, then verifies administrator access through the protected API before opening `/admin/rooms`. The room page lists active and archived rooms and supports creating, editing, and archiving active rooms. Browser-side checks are only user guidance; every admin API operation independently verifies the Bearer token and the database allow-list.
+
 Opening `/rooms/[roomId]` loads that room and rejoins with the persisted session, displaying the nickname returned by the backend. Refreshing, closing/reopening a tab in the same browser profile, disconnecting, and React cleanup never sign out, clear stored authentication, or send Leave. The backend retains a nickname through exactly 60 seconds after the last successful join/heartbeat while `left_at` is null; after that, it assigns a different name. A different browser profile/private session has its own identity.
 
 Each room visit enables Send and starts one 15-second heartbeat only after its own join succeeds, even when a kept-alive Activity preserves an old nickname and draft. Direct submissions are also guarded. A failed join shows its error and keeps sending/heartbeats disabled. Cleanup stops the timer and unsubscribes from Realtime; cancelled joins/history and late channel events are ignored. Count-only updates do not rejoin.
