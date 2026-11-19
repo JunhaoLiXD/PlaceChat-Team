@@ -230,6 +230,41 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/admin/blocked-words": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Blocked Words */
+    get: operations["list_blocked_words_api_v1_admin_blocked_words_get"];
+    put?: never;
+    /** Add Blocked Word */
+    post: operations["add_blocked_word_api_v1_admin_blocked_words_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/blocked-words/{word_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Delete Blocked Word */
+    delete: operations["delete_blocked_word_api_v1_admin_blocked_words__word_id__delete"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -305,6 +340,29 @@ export interface components {
        * Format: date-time
        */
       updated_at: string;
+    };
+    /**
+     * BlockedWordCreate
+     * @description A word or phrase to mask in new messages (D3). Stored trimmed and lowercase.
+     */
+    BlockedWordCreate: {
+      /** Word */
+      word: string;
+    };
+    /** BlockedWordResponse */
+    BlockedWordResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Word */
+      word: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
     };
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -963,6 +1021,88 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["AdminRoomResponse"];
         };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_blocked_words_api_v1_admin_blocked_words_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BlockedWordResponse"][];
+        };
+      };
+    };
+  };
+  add_blocked_word_api_v1_admin_blocked_words_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["BlockedWordCreate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BlockedWordResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  delete_blocked_word_api_v1_admin_blocked_words__word_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        word_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       /** @description Validation Error */
       422: {
