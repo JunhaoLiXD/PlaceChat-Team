@@ -24,6 +24,8 @@ from app.modules.messaging import service
 from app.modules.messaging.models import Message
 from app.modules.rooms.models import Room, RoomMember
 from app.modules.rooms.service import Membership
+from app.modules.safety.models import BlockedWord
+from app.modules.safety.word_filter import filter_text as real_filter_text
 
 SESSION_ID = str(uuid4())
 Published = list[tuple[str, str, dict[str, Any]]]
@@ -87,7 +89,9 @@ def pipeline(monkeypatch: pytest.MonkeyPatch) -> Pipeline:
     monkeypatch.setattr(service, "ensure_member", pipeline.step("ensure_member", membership))
     monkeypatch.setattr(service, "check_not_blocked", pipeline.step("check_not_blocked"))
     monkeypatch.setattr(service, "check_rate_limit", pipeline.step("check_rate_limit"))
-    monkeypatch.setattr(service, "filter_text", pipeline.step("filter_text", lambda text: text))
+    monkeypatch.setattr(
+        service, "filter_text", pipeline.step("filter_text", lambda _db, text: text)
+    )
     monkeypatch.setattr(
         service,
         "publish",
@@ -152,10 +156,25 @@ def test_broadcast_never_includes_session_id(
 def test_filtered_text_is_what_gets_stored(
     client: TestClient, db: Session, room: Room, pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(service, "filter_text", lambda text: text.replace("darn", "****"))
+    monkeypatch.setattr(service, "filter_text", lambda _db, text: text.replace("darn", "****"))
 
     response = send(client, room.id, "darn it")
 
+    assert response.json()["body"] == "**** it"
+    assert stored(db)[0].body == "**** it"
+    assert pipeline.published[0][2]["body"] == "**** it"
+
+
+def test_blocked_word_is_masked_in_stored_and_broadcast_message(
+    client: TestClient, db: Session, room: Room, pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db.add(BlockedWord(id=uuid4(), word="darn", created_at=datetime.now(UTC)))
+    db.commit()
+    monkeypatch.setattr(service, "filter_text", real_filter_text)
+
+    response = send(client, room.id, "DARN it")
+
+    assert response.status_code == 201
     assert response.json()["body"] == "**** it"
     assert stored(db)[0].body == "**** it"
     assert pipeline.published[0][2]["body"] == "**** it"

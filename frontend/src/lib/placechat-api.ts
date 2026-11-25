@@ -1,8 +1,13 @@
 import { MOCK_ROOMS } from "@/lib/mock-data";
 import { publicConfig, shouldUseMocks } from "@/lib/config";
 import type {
+  AdminRoom,
+  AdminRoomCreate,
+  AdminRoomUpdate,
   ApiErrorBody,
+  BlockedWord,
   ChatMessage,
+  HistoryMessage,
   JoinRoomResult,
   ReportReason,
   RoomSummary,
@@ -67,6 +72,9 @@ async function apiFetch<T>(
     );
   }
 
+  // 204 No Content (for example DELETE) has no body to parse.
+  if (response.status === 204) return undefined as T;
+
   return (await response.json()) as T;
 }
 
@@ -82,23 +90,106 @@ export async function listRooms(): Promise<RoomSummary[]> {
   });
 }
 
-export async function joinRoom(roomId: string): Promise<JoinRoomResult> {
-  if (shouldUseMocks()) {
-    const room = MOCK_ROOMS.find((candidate) => candidate.id === roomId);
-    if (!room) {
-      throw new ApiRequestError(
-        "This room does not exist or has been closed.",
-        404,
-        "ROOM_NOT_FOUND",
-      );
-    }
-    const { id, name, description } = room;
-    return { room: { id, name, description }, nickname: "Quiet Otter" };
-  }
+/** Admin operations always use the real protected API, even in local mock mode. */
+export async function listAdminRooms(): Promise<AdminRoom[]> {
+  return apiFetch<AdminRoom[]>("/api/v1/admin/rooms", {
+    auth: true,
+    cache: "no-store",
+  });
+}
 
-  return apiFetch<JoinRoomResult>(`/api/v1/rooms/${roomId}/join`, {
+export async function createAdminRoom(
+  room: AdminRoomCreate,
+): Promise<AdminRoom> {
+  return apiFetch<AdminRoom>("/api/v1/admin/rooms", {
+    method: "POST",
+    body: JSON.stringify(room),
+    auth: true,
+  });
+}
+
+export async function updateAdminRoom(
+  roomId: string,
+  changes: AdminRoomUpdate,
+): Promise<AdminRoom> {
+  return apiFetch<AdminRoom>(`/api/v1/admin/rooms/${roomId}`, {
+    method: "PATCH",
+    body: JSON.stringify(changes),
+    auth: true,
+  });
+}
+
+export async function archiveAdminRoom(roomId: string): Promise<AdminRoom> {
+  return apiFetch<AdminRoom>(`/api/v1/admin/rooms/${roomId}/archive`, {
     method: "POST",
     auth: true,
+  });
+}
+
+export async function listBlockedWords(): Promise<BlockedWord[]> {
+  return apiFetch<BlockedWord[]>("/api/v1/admin/blocked-words", {
+    auth: true,
+    cache: "no-store",
+  });
+}
+
+export async function addBlockedWord(word: string): Promise<BlockedWord> {
+  return apiFetch<BlockedWord>("/api/v1/admin/blocked-words", {
+    method: "POST",
+    body: JSON.stringify({ word }),
+    auth: true,
+  });
+}
+
+export async function deleteBlockedWord(wordId: string): Promise<void> {
+  await apiFetch<void>(`/api/v1/admin/blocked-words/${wordId}`, {
+    method: "DELETE",
+    auth: true,
+  });
+}
+
+// Survive component/Activity remounts in this tab. A delayed Leave must finish
+// before a later join can create the next visit's membership in the same room.
+const membershipRequests = new Map<string, Promise<void>>();
+
+function queueMembershipChange<T>(
+  roomId: string,
+  change: () => Promise<T>,
+): Promise<T> {
+  const previous = membershipRequests.get(roomId) ?? Promise.resolve();
+  const request = previous.then(change);
+  // A failed cleanup must release the queue for the next visit too.
+  const settled = request.then(
+    () => undefined,
+    () => undefined,
+  );
+  membershipRequests.set(roomId, settled);
+  void settled.then(() => {
+    if (membershipRequests.get(roomId) === settled)
+      membershipRequests.delete(roomId);
+  });
+  return request;
+}
+
+export async function joinRoom(roomId: string): Promise<JoinRoomResult> {
+  return queueMembershipChange(roomId, async () => {
+    if (shouldUseMocks()) {
+      const room = MOCK_ROOMS.find((candidate) => candidate.id === roomId);
+      if (!room) {
+        throw new ApiRequestError(
+          "This room does not exist or has been closed.",
+          404,
+          "ROOM_NOT_FOUND",
+        );
+      }
+      const { id, name, description } = room;
+      return { room: { id, name, description }, nickname: "Quiet Otter" };
+    }
+
+    return apiFetch<JoinRoomResult>(`/api/v1/rooms/${roomId}/join`, {
+      method: "POST",
+      auth: true,
+    });
   });
 }
 
@@ -113,11 +204,13 @@ export async function heartbeatRoom(roomId: string): Promise<void> {
 
 /** Leave the room and free the nickname right away (B3). */
 export async function leaveRoom(roomId: string): Promise<void> {
-  if (shouldUseMocks()) return;
+  return queueMembershipChange(roomId, async () => {
+    if (shouldUseMocks()) return;
 
-  await apiFetch(`/api/v1/rooms/${roomId}/leave`, {
-    method: "POST",
-    auth: true,
+    await apiFetch(`/api/v1/rooms/${roomId}/leave`, {
+      method: "POST",
+      auth: true,
+    });
   });
 }
 
@@ -154,4 +247,17 @@ export async function reportMessage(
     body: JSON.stringify(reason ? { reason } : {}),
     auth: true,
   });
+}
+
+export async function getRoomMessages(
+  roomId: string,
+  after?: string,
+): Promise<HistoryMessage[]> {
+  if (shouldUseMocks()) return [];
+
+  const query = after ? `?after=${encodeURIComponent(after)}` : "";
+  return apiFetch<HistoryMessage[]>(
+    `/api/v1/rooms/${roomId}/messages${query}`,
+    { auth: true, cache: "no-store" },
+  );
 }
