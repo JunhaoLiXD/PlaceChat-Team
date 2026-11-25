@@ -68,4 +68,22 @@ describe("useConnectionBanner", () => {
 
     expect(hook.result.current).toBe("lost");
   });
+
+  test("does not carry a previous room's loss into a new room's initial connection", () => {
+    const hook = renderHook(
+      ({ status, roomId }) => useConnectionBanner(status, roomId),
+      {
+        initialProps: {
+          status: "subscribed" as RoomChannelStatus,
+          roomId: "room-1",
+        },
+      },
+    );
+    hook.rerender({ status: "error", roomId: "room-1" });
+    expect(hook.result.current).toBe("lost");
+    hook.rerender({ status: "connecting", roomId: "room-2" });
+    expect(hook.result.current).toBeNull();
+    hook.rerender({ status: "subscribed", roomId: "room-2" });
+    expect(hook.result.current).toBeNull();
+  });
 });

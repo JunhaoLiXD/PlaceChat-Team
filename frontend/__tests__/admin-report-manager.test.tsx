@@ -30,28 +30,35 @@ vi.mock("@/lib/placechat-api", async (importOriginal) => ({
 
 const firstReport: AdminReport = {
   id: "report-1",
+  message_id: "message-1",
+  room_id: "room-1",
   reason: "harassment",
+  status: "pending",
   created_at: "2026-11-10T14:01:00Z",
   message: {
     id: "message-1",
+    room_id: "room-1",
     body: "An unsafe message",
     nickname: "Quiet Otter",
     created_at: "2026-11-10T14:00:00Z",
   },
-  room: { id: "room-1", name: "Library West" },
+  room: { id: "room-1", name: "Library West", description: "Quiet floors." },
 };
 
 const secondReport: AdminReport = {
   ...firstReport,
   id: "report-2",
+  message_id: "message-2",
+  room_id: "room-2",
   reason: null,
   message: {
     ...firstReport.message,
     id: "message-2",
+    room_id: "room-2",
     body: "Another reported message",
     nickname: "Calm Fox",
   },
-  room: { id: "room-2", name: "Reitz Union" },
+  room: { id: "room-2", name: "Reitz Union", description: "Student union." },
 };
 
 beforeEach(() => {

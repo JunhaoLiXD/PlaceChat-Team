@@ -18,9 +18,11 @@ import {
   heartbeatRoom,
   joinRoom,
   leaveRoom,
+  listRooms,
   sendRoomMessage,
 } from "@/lib/placechat-api";
 import type { ChatMessage, RoomSummary } from "@/lib/placechat-types";
+import { createRoomRecovery } from "@/lib/room-recovery";
 import { useConnectionBanner } from "@/lib/use-connection-banner";
 import { type RoomChannelStatus, useRoomChannel } from "@/lib/use-room-channel";
 
@@ -52,7 +54,6 @@ const DEMO_MESSAGES: ChatMessage[] = [
 ];
 
 // The badge shows the live status; the lost/restored banner below the header is PBI-17 (#21).
-// Refetching missed messages after a reconnect waits for the history endpoint (C3, Sprint 2).
 const CONNECTION_BADGES: Record<
   RoomChannelStatus | "demo",
   { label: string; className: string; dotClassName: string }
@@ -137,7 +138,9 @@ export function MessageFeed({
   ownMessageIds: Set<string>;
 }) {
   const scrollRegionRef = useRef<HTMLDivElement>(null);
-  const previousCountRef = useRef(messages.length);
+  const scrollFrameRef = useRef<number | null>(null);
+  const previousIdsRef = useRef(new Set(messages.map((message) => message.id)));
+  const previousSubmittedIdsRef = useRef(new Set(ownMessageIds));
   const isNearBottomRef = useRef(true);
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -154,27 +157,44 @@ export function MessageFeed({
     setUnreadCount(0);
   };
 
-  useEffect(() => {
-    const previousCount = previousCountRef.current;
-    if (messages.length <= previousCount) {
-      previousCountRef.current = messages.length;
-      return;
-    }
+  useEffect(
+    () => () => {
+      if (scrollFrameRef.current !== null)
+        cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = null;
+    },
+    [],
+  );
 
-    const addedMessages = messages.slice(previousCount);
+  useEffect(() => {
+    // Catch-up can insert missed messages before live arrivals already on screen.
+    const addedMessages = messages.filter(
+      (message) => !previousIdsRef.current.has(message.id),
+    );
+    // History ownership (including another tab) does not mean the reader just
+    // submitted a message. A POST acknowledgement may also follow its live echo.
+    const newlySubmitted = messages.some(
+      (message) =>
+        ownMessageIds.has(message.id) &&
+        !previousSubmittedIdsRef.current.has(message.id),
+    );
+    previousIdsRef.current = new Set(messages.map((message) => message.id));
+    previousSubmittedIdsRef.current = new Set(ownMessageIds);
+    if (addedMessages.length === 0 && !newlySubmitted) return;
     const onlyOwnMessages = addedMessages.every((message) =>
       ownMessageIds.has(message.id),
     );
 
-    if (isNearBottomRef.current || onlyOwnMessages) {
-      requestAnimationFrame(() =>
-        scrollToBottom(onlyOwnMessages ? "smooth" : "auto"),
-      );
+    if (isNearBottomRef.current || onlyOwnMessages || newlySubmitted) {
+      if (scrollFrameRef.current !== null)
+        cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = requestAnimationFrame(() => {
+        scrollFrameRef.current = null;
+        scrollToBottom(onlyOwnMessages || newlySubmitted ? "smooth" : "auto");
+      });
     } else {
       setUnreadCount((count) => count + addedMessages.length);
     }
-
-    previousCountRef.current = messages.length;
   }, [messages, ownMessageIds]);
 
   const handleScroll = () => {
@@ -225,9 +245,25 @@ export function MessageFeed({
 
 export function ChatRoom({ room }: { room: RoomSummary }) {
   const mockMode = shouldUseMocks();
-  const [nickname, setNickname] = useState<string | null>(null);
+  const [liveParticipantCount, setLiveParticipantCount] = useState<{
+    roomId: string;
+    count: number;
+  } | null>(null);
+  const participantCount =
+    liveParticipantCount?.roomId === room.id
+      ? liveParticipantCount.count
+      : room.participant_count;
+  const setParticipantCount = (count: number) =>
+    setLiveParticipantCount({ roomId: room.id, count });
+  const [identity, setIdentity] = useState<{
+    roomId: string;
+    nickname: string;
+  } | null>(null);
+  const nickname = identity?.roomId === room.id ? identity.nickname : null;
+  // A saved nickname is not proof that the current Activity visit has joined.
+  const [hasJoined, setHasJoined] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
-  // Real rooms start empty until the history endpoint (C3, Sprint 2) exists.
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>(() =>
     mockMode
       ? DEMO_MESSAGES.map((message) => ({ ...message, room_id: room.id }))
@@ -240,40 +276,121 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
   const [sendError, setSendError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [isLeaving, setIsLeaving] = useState(false);
+  const visitRef = useRef<{
+    roomId: string;
+    active: boolean;
+    joined: boolean;
+    recovery: ReturnType<typeof createRoomRecovery>;
+    stop: () => void;
+  } | null>(null);
   const router = useRouter();
 
   const trimmedDraft = draft.trim();
   const messageLength = Array.from(trimmedDraft).length;
   const isTooLong = messageLength > MESSAGE_MAX_LENGTH;
   const canSend =
-    nickname !== null && messageLength > 0 && !isTooLong && !isSending;
+    hasJoined &&
+    nickname !== null &&
+    messageLength > 0 &&
+    !isTooLong &&
+    !isSending &&
+    !isLeaving;
 
   const participantLabel = useMemo(
     () =>
-      `${room.participant_count} ${room.participant_count === 1 ? "person" : "people"} here`,
-    [room.participant_count],
+      `${participantCount} ${participantCount === 1 ? "person" : "people"} here`,
+    [participantCount],
   );
 
-  const channelStatus = useRoomChannel(mockMode ? null : room.id, (message) =>
-    setMessages((current) => mergeMessages(current, [message])),
+  const channelStatus = useRoomChannel(
+    mockMode || isLeaving ? null : room.id,
+    (message) => {
+      const visit = visitRef.current;
+      if (!visit?.active || visit.roomId !== room.id) return;
+      // Recovery owns the removal tombstones for history, sends and live echoes.
+      visit.recovery.add([message]);
+    },
+    (messageId) => {
+      const visit = visitRef.current;
+      if (!visit?.active || visit.roomId !== room.id) return;
+      visit.recovery.remove(messageId);
+      setMessages((current) =>
+        current.filter((message) => message.id !== messageId),
+      );
+    },
+    (status) => {
+      const visit = visitRef.current;
+      if (!visit?.active || visit.roomId !== room.id) return;
+      visit.recovery.status(status);
+      if (status === "subscribed") {
+        void listRooms()
+          .then((rooms) => {
+            if (!visit.active || visitRef.current !== visit) return;
+            const currentRoom = rooms.find(({ id }) => id === room.id);
+            if (currentRoom) setParticipantCount(currentRoom.participant_count);
+          })
+          .catch(() => {
+            // Live presence broadcasts continue updating the last known count.
+          });
+      }
+    },
+    setParticipantCount,
   );
   const badge = CONNECTION_BADGES[mockMode ? "demo" : channelStatus];
-  const banner = useConnectionBanner(channelStatus);
+  const banner = useConnectionBanner(channelStatus, room.id);
 
   useEffect(() => {
-    let cancelled = false;
+    let interval: number | undefined;
+    const recovery = createRoomRecovery(
+      room.id,
+      (incoming) =>
+        setMessages((current) =>
+          mergeMessages(
+            current.filter((message) => message.room_id === room.id),
+            incoming,
+          ),
+        ),
+      setHistoryError,
+    );
+    const visit = {
+      roomId: room.id,
+      active: true,
+      joined: false,
+      recovery,
+      stop() {
+        visit.active = false;
+        visit.joined = false;
+        recovery.stop();
+        window.clearInterval(interval);
+        setHasJoined(false);
+        setIsSending(false);
+        setOwnMessageIds(new Set());
+      },
+    };
+    visitRef.current = visit;
+    const request = joinRoom(room.id);
 
     // This also runs when Next shows a kept-alive page again (React <Activity>),
     // so a Leave from the earlier visit must not keep the controls disabled.
     async function join() {
       try {
-        const result = await joinRoom(room.id);
-        if (!cancelled) {
-          setNickname(result.nickname);
-          setIsLeaving(false);
-        }
+        const result = await request;
+        if (!visit.active) return;
+        visit.joined = true;
+        setIdentity({ roomId: room.id, nickname: result.nickname });
+        setHasJoined(true);
+        setJoinError(null);
+        setIsLeaving(false);
+        // One timer per joined visit keeps using the persisted session. Realtime
+        // reconnects never rejoin, allocate a nickname, or start a second timer.
+        interval = window.setInterval(() => {
+          void heartbeatRoom(room.id).catch(() => {
+            // A missed HTTP heartbeat is retried on the next 15-second tick.
+          });
+        }, HEARTBEAT_INTERVAL_MS);
+        if (!mockMode) recovery.start();
       } catch (caught) {
-        if (!cancelled) {
+        if (visit.active) {
           setIsLeaving(false);
           setJoinError(
             caught instanceof Error
@@ -287,24 +404,19 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     void join();
 
     return () => {
-      cancelled = true;
+      // Refresh, Activity hiding and StrictMode cleanup preserve the server's
+      // 60-second hold from last_seen_at; only explicit navigation sends Leave.
+      visit.stop();
+      if (visitRef.current === visit) visitRef.current = null;
+      setJoinError(null);
+      setIsLeaving(false);
+      setHistoryError(null);
     };
-  }, [room]);
-
-  useEffect(() => {
-    if (!nickname) return;
-
-    const interval = window.setInterval(() => {
-      void heartbeatRoom(room.id).catch(() => {
-        // A missed heartbeat is retried on the next tick; the banner reports Realtime drops.
-      });
-    }, HEARTBEAT_INTERVAL_MS);
-
-    return () => window.clearInterval(interval);
-  }, [nickname, room.id]);
+  }, [mockMode, room.id]);
 
   const handleSubmit = async (event?: FormEvent) => {
     event?.preventDefault();
+    if (isLeaving) return;
     setSendError(null);
 
     if (messageLength === 0) return;
@@ -314,7 +426,14 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
       return;
     }
 
-    if (!nickname) {
+    const visit = visitRef.current;
+    if (
+      !nickname ||
+      !hasJoined ||
+      !visit?.active ||
+      !visit.joined ||
+      visit.roomId !== room.id
+    ) {
       setSendError("Wait a moment while we finish joining the room.");
       return;
     }
@@ -327,34 +446,37 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
         trimmedDraft,
         nickname,
       );
+      if (!visit.active || visitRef.current !== visit) return;
       setOwnMessageIds((ids) => new Set(ids).add(sentMessage.id));
       // The broadcast of this message may arrive first; merging keeps one copy.
-      setMessages((current) => mergeMessages(current, [sentMessage]));
+      visit.recovery.add([{ ...sentMessage, is_mine: true }]);
       setDraft("");
     } catch (caught) {
+      if (!visit.active || visitRef.current !== visit) return;
       setSendError(
         caught instanceof Error
           ? caught.message
           : "Your message couldn’t be sent.",
       );
     } finally {
-      setIsSending(false);
+      if (visit.active && visitRef.current === visit) setIsSending(false);
     }
   };
 
-  // Leave frees the nickname right away (§5.2). Unmounting the page then closes the
-  // channel and stops the heartbeat, so no more messages arrive from this room.
-  const handleLeave = async (event?: MouseEvent) => {
+  // Stop local activity and navigate now; ordered membership cleanup continues
+  // even while a join or Leave response is stalled.
+  const handleLeave = (event?: MouseEvent) => {
     event?.preventDefault();
-    if (isLeaving) return;
+    const visit = visitRef.current;
+    if (isLeaving || (visit && !visit.active)) return;
     setIsLeaving(true);
-
-    if (nickname) {
-      try {
-        await leaveRoom(room.id);
-      } catch {
+    visit?.stop();
+    if (visit) {
+      // Queue after even a pending Join; a later visit's Join waits for this
+      // explicit cleanup. Navigation and local cancellation remain immediate.
+      void leaveRoom(room.id).catch(() => {
         // Still go back: presence times out after 30 seconds without heartbeats.
-      }
+      });
     }
     router.push("/");
   };
@@ -415,15 +537,17 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
         <section className="flex min-h-[calc(100vh-5.5rem)] flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 shadow-xl shadow-slate-200/70 sm:min-h-[calc(100vh-7rem)]">
           <div className="flex min-h-14 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 sm:px-6">
             <div className="min-w-0">
-              {nickname ? (
+              {joinError ? (
+                <p role="alert" className="text-sm text-slate-500">
+                  {joinError}
+                </p>
+              ) : hasJoined && nickname ? (
                 <p className="truncate text-sm text-slate-600">
                   You are{" "}
                   <span className="font-bold text-slate-950">{nickname}</span>
                 </p>
               ) : (
-                <p className="text-sm text-slate-500">
-                  {joinError ?? "Finding your nickname…"}
-                </p>
+                <p className="text-sm text-slate-500">Finding your nickname…</p>
               )}
             </div>
             <div
@@ -454,7 +578,24 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
             </p>
           ) : null}
 
-          <MessageFeed messages={messages} ownMessageIds={ownMessageIds} />
+          {historyError ? (
+            <p role="alert" className="px-4 py-2 text-sm text-amber-800">
+              {historyError}{" "}
+              <button
+                type="button"
+                className="underline"
+                onClick={() => visitRef.current?.recovery.retry()}
+              >
+                Retry messages
+              </button>
+            </p>
+          ) : null}
+
+          <MessageFeed
+            key={room.id}
+            messages={messages.filter((message) => message.room_id === room.id)}
+            ownMessageIds={ownMessageIds}
+          />
 
           <div className="border-t border-slate-200 bg-white p-3 sm:p-4">
             <p className="mb-2 px-1 text-xs text-slate-500">

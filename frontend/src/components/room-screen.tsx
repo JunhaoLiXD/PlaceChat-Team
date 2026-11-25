@@ -52,7 +52,7 @@ export function RoomScreen({ roomId }: { roomId: string }) {
   }, [roomId]);
 
   if (state.status === "ready") {
-    return <ChatRoom room={state.room} />;
+    return <ChatRoom key={state.room.id} room={state.room} />;
   }
 
   if (state.status === "loading") {

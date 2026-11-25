@@ -27,3 +27,9 @@ class MessageResponse(BaseModel):
     nickname: str
     body: str
     created_at: datetime
+
+
+class MessageHistoryResponse(MessageResponse):
+    """A history item includes ownership without exposing the sender session id."""
+
+    is_mine: bool

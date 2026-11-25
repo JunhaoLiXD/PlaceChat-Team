@@ -65,6 +65,20 @@ test("signs in, verifies administrator access, and opens room management", async
   expect(mocks.replace).toHaveBeenCalledWith("/admin/rooms");
 });
 
+test("clears the email and password after a successful sign-in", async () => {
+  render(<AdminLoginForm />);
+
+  submitCredentials();
+
+  await waitFor(() => {
+    expect(mocks.replace).toHaveBeenCalledWith("/admin/rooms");
+  });
+  expect((screen.getByLabelText("Email") as HTMLInputElement).value).toBe("");
+  expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe(
+    "",
+  );
+});
+
 test("shows a clear not-authorized message and clears a non-admin session", async () => {
   mocks.listRooms.mockRejectedValue(
     new ApiRequestError("You are not allowed to do this.", 403, "FORBIDDEN"),

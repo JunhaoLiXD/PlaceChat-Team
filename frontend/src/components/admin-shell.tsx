@@ -6,6 +6,12 @@ import { useState } from "react";
 
 import { signOutAdmin } from "@/lib/admin-auth";
 
+const ADMIN_LINKS = [
+  { href: "/admin/rooms", label: "Rooms" },
+  { href: "/admin/reports", label: "Reports" },
+  { href: "/admin/words", label: "Words" },
+];
+
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -44,32 +50,21 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                 aria-label="Admin navigation"
                 className="hidden items-center gap-1 sm:flex"
               >
-                <Link
-                  href="/admin/rooms"
-                  aria-current={
-                    pathname === "/admin/rooms" ? "page" : undefined
-                  }
-                  className={`rounded-lg px-3 py-2 text-sm font-semibold transition hover:bg-white/15 focus-visible:outline-2 focus-visible:outline-violet-400 ${
-                    pathname === "/admin/rooms"
-                      ? "bg-white/10 text-white"
-                      : "text-slate-300"
-                  }`}
-                >
-                  Rooms
-                </Link>
-                <Link
-                  href="/admin/reports"
-                  aria-current={
-                    pathname === "/admin/reports" ? "page" : undefined
-                  }
-                  className={`rounded-lg px-3 py-2 text-sm font-semibold transition hover:bg-white/15 focus-visible:outline-2 focus-visible:outline-violet-400 ${
-                    pathname === "/admin/reports"
-                      ? "bg-white/10 text-white"
-                      : "text-slate-300"
-                  }`}
-                >
-                  Reports
-                </Link>
+                {ADMIN_LINKS.map((link) => {
+                  const isCurrent = pathname === link.href;
+                  return (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      aria-current={isCurrent ? "page" : undefined}
+                      className={`rounded-lg px-3 py-2 text-sm font-semibold transition hover:bg-white/15 focus-visible:outline-2 focus-visible:outline-violet-400 ${
+                        isCurrent ? "bg-white/10 text-white" : "text-slate-300"
+                      }`}
+                    >
+                      {link.label}
+                    </Link>
+                  );
+                })}
               </nav>
             ) : null}
           </div>
@@ -98,28 +93,23 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             aria-label="Admin navigation mobile"
             className="mx-auto flex w-full max-w-7xl border-t border-white/10 px-5 sm:hidden"
           >
-            <Link
-              href="/admin/rooms"
-              aria-current={pathname === "/admin/rooms" ? "page" : undefined}
-              className={`flex min-h-11 flex-1 items-center justify-center border-b-2 text-sm font-semibold ${
-                pathname === "/admin/rooms"
-                  ? "border-violet-400 text-white"
-                  : "border-transparent text-slate-400"
-              }`}
-            >
-              Rooms
-            </Link>
-            <Link
-              href="/admin/reports"
-              aria-current={pathname === "/admin/reports" ? "page" : undefined}
-              className={`flex min-h-11 flex-1 items-center justify-center border-b-2 text-sm font-semibold ${
-                pathname === "/admin/reports"
-                  ? "border-violet-400 text-white"
-                  : "border-transparent text-slate-400"
-              }`}
-            >
-              Reports
-            </Link>
+            {ADMIN_LINKS.map((link) => {
+              const isCurrent = pathname === link.href;
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  aria-current={isCurrent ? "page" : undefined}
+                  className={`flex min-h-11 flex-1 items-center justify-center border-b-2 text-sm font-semibold ${
+                    isCurrent
+                      ? "border-violet-400 text-white"
+                      : "border-transparent text-slate-400"
+                  }`}
+                >
+                  {link.label}
+                </Link>
+              );
+            })}
           </nav>
         ) : null}
       </header>

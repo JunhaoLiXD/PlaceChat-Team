@@ -5,7 +5,60 @@ from uuid import UUID
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.modules.rooms.models import Room, RoomMember
+from app.modules.rooms.models import Room, RoomMember, RoomPresenceCount
+
+
+def active_room_ids(db: Session) -> list[UUID]:
+    return list(db.scalars(select(Room.id).where(Room.status == "active").order_by(Room.id)))
+
+
+def participant_count(db: Session, room_id: UUID, since: datetime) -> int:
+    query = (
+        select(func.count())
+        .select_from(RoomMember)
+        .where(
+            RoomMember.room_id == room_id,
+            RoomMember.left_at.is_(None),
+            RoomMember.last_seen_at >= since,
+        )
+    )
+    return db.scalar(query)
+
+
+def get_presence_snapshot(
+    db: Session, room_id: UUID, *, since: datetime | None = None
+) -> RoomPresenceCount:
+    """Initialize under the room lock, before a membership change.
+
+    The first sweep includes all joined members in its baseline so preexisting stale
+    memberships also get a timeout update, including zero. Subsequent observations use
+    the persisted snapshot. No membership timestamps or nickname holds are changed.
+    """
+    state = db.get(RoomPresenceCount, room_id)
+    if state is None:
+        initial_count = (
+            participant_count(db, room_id, since)
+            if since is not None
+            else db.scalar(
+                select(func.count())
+                .select_from(RoomMember)
+                .where(RoomMember.room_id == room_id, RoomMember.left_at.is_(None))
+            )
+        )
+        state = RoomPresenceCount(room_id=room_id, participant_count=initial_count)
+        db.add(state)
+        db.flush()
+    return state
+
+
+def refresh_presence_count(db: Session, state: RoomPresenceCount, since: datetime) -> int | None:
+    """Record one observation in the caller's locked transaction; return only changes."""
+    count = participant_count(db, state.room_id, since)
+    if count == state.participant_count:
+        return None
+    state.participant_count = count
+    db.flush()
+    return count
 
 
 def list_active_rooms(db: Session, since: datetime) -> list[tuple[Room, int]]:

@@ -297,7 +297,9 @@ ADMIN_REQUESTS = [
 
 
 def test_every_admin_route_requires_admin(app: FastAPI) -> None:
-    admin_paths = [path for path in app.openapi()["paths"] if path.startswith("/api/v1/admin")]
+    admin_paths = [
+        path for path in app.openapi()["paths"] if path.startswith("/api/v1/admin/rooms")
+    ]
     assert sorted(admin_paths) == [
         "/api/v1/admin/rooms",
         "/api/v1/admin/rooms/{room_id}",

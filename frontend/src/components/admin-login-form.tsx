@@ -24,6 +24,10 @@ export function AdminLoginForm() {
     try {
       await signInWithPassword(email.trim(), password);
       await listAdminRooms();
+      // Next keeps this page alive in a hidden <Activity> after navigation, so
+      // clear the credentials now; otherwise they are still shown after Sign out.
+      setEmail("");
+      setPassword("");
       router.replace("/admin/rooms");
     } catch (caught) {
       if (
