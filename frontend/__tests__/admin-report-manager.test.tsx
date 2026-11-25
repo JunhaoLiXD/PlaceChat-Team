@@ -12,6 +12,7 @@ import {
   ADMIN_REPORT_REFRESH_MS,
   AdminReportManager,
 } from "@/components/admin-report-manager";
+import { ADMIN_SIGNED_OUT_EVENT } from "@/lib/admin-auth";
 import { ApiRequestError } from "@/lib/placechat-api";
 import type { AdminReport } from "@/lib/placechat-types";
 
@@ -95,6 +96,23 @@ test("lists pending reports and schedules a 30-second refresh", async () => {
   await waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(2));
   expect(screen.getByText("1 pending")).toBeDefined();
   intervalSpy.mockRestore();
+});
+
+test("clears loaded reports and hides the queue while access is rechecked after sign-out", async () => {
+  render(<AdminReportManager />);
+  expect(await screen.findByText("An unsafe message")).toBeDefined();
+  mocks.list.mockRejectedValueOnce(
+    new ApiRequestError("Not authorized", 401, "UNAUTHORIZED"),
+  );
+
+  act(() => window.dispatchEvent(new Event(ADMIN_SIGNED_OUT_EVENT)));
+
+  expect(screen.queryByText("An unsafe message")).toBeNull();
+  expect(screen.getByLabelText("Loading reports")).toBeDefined();
+  expect(
+    await screen.findByRole("heading", { name: "Not authorized" }),
+  ).toBeDefined();
+  expect(screen.queryByText("An unsafe message")).toBeNull();
 });
 
 test("removes a reported message from the pending queue", async () => {

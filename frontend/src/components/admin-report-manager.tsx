@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { ADMIN_SIGNED_OUT_EVENT } from "@/lib/admin-auth";
 import {
   ApiRequestError,
   dismissAdminReport,
@@ -76,6 +77,17 @@ export function AdminReportManager() {
 
   useEffect(() => {
     mountedRef.current = true;
+    const handleAdminSignOut = () => {
+      latestRequestRef.current += 1;
+      setReports([]);
+      setLoadError(null);
+      setActionError(null);
+      setBusyAction(null);
+      setNotAuthorized(false);
+      setIsLoading(true);
+      setIsRefreshing(false);
+      void loadReports();
+    };
     const initialRequest = window.setTimeout(() => {
       void loadReports();
     }, 0);
@@ -83,12 +95,14 @@ export function AdminReportManager() {
       setIsRefreshing(true);
       void loadReports();
     }, ADMIN_REPORT_REFRESH_MS);
+    window.addEventListener(ADMIN_SIGNED_OUT_EVENT, handleAdminSignOut);
 
     return () => {
       mountedRef.current = false;
       latestRequestRef.current += 1;
       window.clearTimeout(initialRequest);
       window.clearInterval(interval);
+      window.removeEventListener(ADMIN_SIGNED_OUT_EVENT, handleAdminSignOut);
     };
   }, [loadReports]);
 

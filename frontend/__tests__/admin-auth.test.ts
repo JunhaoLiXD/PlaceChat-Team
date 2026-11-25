@@ -28,6 +28,19 @@ test("signs in through Supabase email/password auth", async () => {
   });
 });
 
+test("notifies mounted admin views after a successful sign-out", async () => {
+  auth.signOut.mockResolvedValue({ error: null });
+  const listener = vi.fn();
+  const { ADMIN_SIGNED_OUT_EVENT, signOutAdmin } =
+    await import("@/lib/admin-auth");
+  window.addEventListener(ADMIN_SIGNED_OUT_EVENT, listener);
+
+  await signOutAdmin();
+
+  expect(listener).toHaveBeenCalledOnce();
+  window.removeEventListener(ADMIN_SIGNED_OUT_EVENT, listener);
+});
+
 test("propagates Supabase sign-in and sign-out failures", async () => {
   const signInError = new Error("sign-in failed");
   const signOutError = new Error("sign-out failed");
