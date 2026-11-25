@@ -11,6 +11,7 @@ const fake = vi.hoisted(() => {
   const channels: {
     topic: string;
     options: unknown;
+    broadcasts: Record<string, BroadcastHandler>;
     broadcast?: BroadcastHandler;
     removed?: BroadcastHandler;
     status?: StatusHandler;
@@ -48,16 +49,22 @@ beforeEach(() => {
   fake.client.realtime.setAuth.mockResolvedValue(undefined);
   fake.client.removeChannel.mockResolvedValue("ok");
   fake.client.channel.mockImplementation((topic: string, options: unknown) => {
-    const record: (typeof fake.channels)[number] = { topic, options };
+    const record: (typeof fake.channels)[number] = {
+      topic,
+      options,
+      broadcasts: {},
+    };
     fake.channels.push(record);
     const channel = {
-      on: (_type: string, _filter: unknown, handler: BroadcastHandler) => {
-        if (
-          _filter &&
-          (_filter as { event?: string }).event === "message.removed"
-        ) {
+      on: (
+        _type: string,
+        filter: { event: string },
+        handler: BroadcastHandler,
+      ) => {
+        record.broadcasts[filter.event] = handler;
+        if (filter.event === "message.removed") {
           record.removed = handler;
-        } else {
+        } else if (filter.event === "message.created") {
           record.broadcast = handler;
         }
         return channel;
@@ -75,9 +82,18 @@ async function connected(
   roomId = "room-1",
   onMessage = vi.fn(),
   onMessageRemoved = vi.fn(),
+  onStatus = vi.fn(),
+  onParticipantCount?: (count: number) => void,
 ) {
   const hook = renderHook(
-    ({ id }) => useRoomChannel(id, onMessage, onMessageRemoved),
+    ({ id }) =>
+      useRoomChannel(
+        id,
+        onMessage,
+        onMessageRemoved,
+        onStatus,
+        onParticipantCount,
+      ),
     {
       initialProps: { id: roomId },
     },
@@ -114,10 +130,39 @@ describe("useRoomChannel", () => {
   test("passes on this room's messages and ignores other rooms", async () => {
     const { onMessage, channel } = await connected();
 
-    act(() => channel.broadcast?.({ payload: message("room-1") }));
-    act(() => channel.broadcast?.({ payload: message("room-2") }));
+    act(() =>
+      channel.broadcasts["message.created"]?.({
+        payload: message("room-1"),
+      }),
+    );
+    act(() =>
+      channel.broadcasts["message.created"]?.({
+        payload: message("room-2"),
+      }),
+    );
 
     expect(onMessage).toHaveBeenCalledExactlyOnceWith(message("room-1"));
+  });
+
+  test("passes valid participant counts from presence events", async () => {
+    const onParticipantCount = vi.fn();
+    const { hook, channel } = await connected(
+      "room-1",
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      onParticipantCount,
+    );
+
+    act(() =>
+      channel.broadcasts["presence.updated"]?.({ payload: { count: 7 } }),
+    );
+    act(() =>
+      channel.broadcasts["presence.updated"]?.({ payload: { count: -1 } }),
+    );
+
+    expect(onParticipantCount).toHaveBeenCalledExactlyOnceWith(7);
+    hook.unmount();
   });
 
   test("ignores late message callbacks after cleanup", async () => {

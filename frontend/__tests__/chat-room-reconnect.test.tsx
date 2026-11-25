@@ -1036,9 +1036,11 @@ test.each([false, true])(
     expect(leaves()).toHaveLength(0);
     expect(fake.client.auth.signInAnonymously).not.toHaveBeenCalled();
     expect(fake.client.auth.signOut).not.toHaveBeenCalled();
-    for (const [, init] of fetchMock.mock.calls)
+    for (const [input, init] of fetchMock.mock.calls) {
+      if (String(input).endsWith("/api/v1/rooms")) continue;
       expect(new Headers(init?.headers).get("Authorization")).toBe(
         "Bearer persisted-token",
       );
+    }
   },
 );

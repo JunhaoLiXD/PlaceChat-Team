@@ -27,6 +27,7 @@ const STATUS_BY_STATE: Record<string, RoomChannelStatus> = {
  * #30), and the status goes back to "subscribed" when it succeeds.
  * Removal is the third callback; the fourth reports status synchronously so
  * recovery can freeze its cursor before live arrivals in the same React batch.
+ * The fifth callback receives validated participant-count broadcasts.
  *
  * Pass `null` to stay disconnected (mock data mode has no Supabase project).
  */
@@ -35,6 +36,7 @@ export function useRoomChannel(
   onMessage: (message: ChatMessage) => void,
   onMessageRemoved?: (messageId: string) => void,
   onStatus?: (status: RoomChannelStatus) => void,
+  onParticipantCount?: (count: number) => void,
 ): RoomChannelStatus {
   const [state, setState] = useState<{
     roomId: string | null;
@@ -44,6 +46,7 @@ export function useRoomChannel(
   const onStatusRef = useRef(onStatus);
   const removalRef = useRef<Promise<unknown> | undefined>(undefined);
   const onMessageRemovedRef = useRef(onMessageRemoved);
+  const onParticipantCountRef = useRef(onParticipantCount);
 
   useEffect(() => {
     onMessageRef.current = onMessage;
@@ -51,6 +54,7 @@ export function useRoomChannel(
   });
   useEffect(() => {
     onMessageRemovedRef.current = onMessageRemoved;
+    onParticipantCountRef.current = onParticipantCount;
   });
 
   useEffect(() => {
@@ -88,6 +92,16 @@ export function useRoomChannel(
             const messageId = (payload as { id?: unknown })?.id;
             if (cancelled || typeof messageId !== "string") return;
             onMessageRemovedRef.current?.(messageId);
+          })
+          .on("broadcast", { event: "presence.updated" }, ({ payload }) => {
+            const count = (payload as { count?: unknown } | null)?.count;
+            if (
+              !cancelled &&
+              Number.isInteger(count) &&
+              (count as number) >= 0
+            ) {
+              onParticipantCountRef.current?.(count as number);
+            }
           })
           .subscribe((channelState) => {
             report(STATUS_BY_STATE[channelState] ?? "connecting");

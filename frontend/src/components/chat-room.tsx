@@ -18,6 +18,7 @@ import {
   heartbeatRoom,
   joinRoom,
   leaveRoom,
+  listRooms,
   sendRoomMessage,
 } from "@/lib/placechat-api";
 import type { ChatMessage, RoomSummary } from "@/lib/placechat-types";
@@ -244,6 +245,16 @@ export function MessageFeed({
 
 export function ChatRoom({ room }: { room: RoomSummary }) {
   const mockMode = shouldUseMocks();
+  const [liveParticipantCount, setLiveParticipantCount] = useState<{
+    roomId: string;
+    count: number;
+  } | null>(null);
+  const participantCount =
+    liveParticipantCount?.roomId === room.id
+      ? liveParticipantCount.count
+      : room.participant_count;
+  const setParticipantCount = (count: number) =>
+    setLiveParticipantCount({ roomId: room.id, count });
   const [identity, setIdentity] = useState<{
     roomId: string;
     nickname: string;
@@ -287,8 +298,8 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
 
   const participantLabel = useMemo(
     () =>
-      `${room.participant_count} ${room.participant_count === 1 ? "person" : "people"} here`,
-    [room.participant_count],
+      `${participantCount} ${participantCount === 1 ? "person" : "people"} here`,
+    [participantCount],
   );
 
   const channelStatus = useRoomChannel(
@@ -311,7 +322,19 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
       const visit = visitRef.current;
       if (!visit?.active || visit.roomId !== room.id) return;
       visit.recovery.status(status);
+      if (status === "subscribed") {
+        void listRooms()
+          .then((rooms) => {
+            if (!visit.active || visitRef.current !== visit) return;
+            const currentRoom = rooms.find(({ id }) => id === room.id);
+            if (currentRoom) setParticipantCount(currentRoom.participant_count);
+          })
+          .catch(() => {
+            // Live presence broadcasts continue updating the last known count.
+          });
+      }
     },
+    setParticipantCount,
   );
   const badge = CONNECTION_BADGES[mockMode ? "demo" : channelStatus];
   const banner = useConnectionBanner(channelStatus, room.id);

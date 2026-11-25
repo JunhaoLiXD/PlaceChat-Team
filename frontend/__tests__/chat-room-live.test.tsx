@@ -23,6 +23,8 @@ const channel = vi.hoisted(() => ({
   roomId: undefined as string | null | undefined,
   onMessage: (() => {}) as (message: ChatMessage) => void,
   onMessageRemoved: (() => {}) as (messageId: string) => void,
+  onStatus: (() => {}) as (status: RoomChannelStatus) => void,
+  onParticipantCount: (() => {}) as (count: number) => void,
 }));
 
 const router = vi.hoisted(() => ({ push: vi.fn() }));
@@ -42,11 +44,15 @@ vi.mock("@/lib/use-room-channel", () => ({
   useRoomChannel: (
     roomId: string | null,
     onMessage: (message: ChatMessage) => void,
-    onMessageRemoved: (messageId: string) => void,
+    onMessageRemoved?: (messageId: string) => void,
+    onStatus?: (status: RoomChannelStatus) => void,
+    onParticipantCount?: (count: number) => void,
   ) => {
     channel.roomId = roomId;
     channel.onMessage = onMessage;
-    channel.onMessageRemoved = onMessageRemoved;
+    channel.onMessageRemoved = onMessageRemoved ?? (() => {});
+    channel.onStatus = onStatus ?? (() => {});
+    channel.onParticipantCount = onParticipantCount ?? (() => {});
     return channel.status;
   },
 }));
@@ -312,6 +318,18 @@ test("shows messages from other people as they arrive", async () => {
   expect(incoming.closest("article")?.dataset.ownMessage).toBe("false");
 });
 
+test("updates the room header from live presence events", async () => {
+  render(<ChatRoom room={room} />);
+  await screen.findByText(/you are/i);
+  expect(screen.getByText("0 people here")).toBeDefined();
+
+  act(() => channel.onParticipantCount(1));
+  expect(screen.getByText("1 person here")).toBeDefined();
+
+  act(() => channel.onParticipantCount(8));
+  expect(screen.getByText("8 people here")).toBeDefined();
+});
+
 test("the status badge follows the realtime channel", async () => {
   const { rerender } = render(<ChatRoom room={room} />);
   expect(screen.getByRole("status").textContent).toBe("Connecting…");
@@ -323,6 +341,18 @@ test("the status badge follows the realtime channel", async () => {
   channel.status = "error";
   rerender(<ChatRoom room={room} />);
   expect(screen.getByRole("status").textContent).toBe("Reconnecting…");
+});
+
+test("refreshes the participant count when the room channel connects", async () => {
+  render(<ChatRoom room={room} />);
+  await screen.findByText(/you are/i);
+  fetchMock.mockResolvedValueOnce(json([{ ...room, participant_count: 1 }]));
+
+  await act(async () => channel.onStatus("subscribed"));
+
+  expect(await screen.findByText("1 person here")).toBeDefined();
+  expect(requestsTo("/api/v1/rooms")).toHaveLength(1);
+  expect(requestsTo("/join")).toHaveLength(1);
 });
 
 test("tells the participant when the connection is lost and restored", async () => {
