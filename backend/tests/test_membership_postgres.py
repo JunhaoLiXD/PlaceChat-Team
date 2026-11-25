@@ -5,6 +5,7 @@ The fixture creates and drops its own database; it never reads the application's
 Only auth.users' UUID key is stubbed: full Supabase Auth remains a live smoke check.
 """
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Event
@@ -12,13 +13,14 @@ from time import monotonic, sleep
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Engine, inspect, select, text, update
+from fastapi.testclient import TestClient
+from sqlalchemy import Engine, event, inspect, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotAMember
-from app.modules.rooms import repository, service
-from app.modules.rooms.models import Room, RoomMember
+from app.modules.rooms import presence, repository, service
+from app.modules.rooms.models import Room, RoomMember, RoomPresenceCount
 from app.modules.rooms.schemas import JoinRoomResponse
 
 NOW = datetime(2026, 10, 21, 12, tzinfo=UTC)
@@ -217,7 +219,9 @@ def test_deleting_auth_user_cascades_only_their_memberships(
         )
 
 
-@pytest.mark.parametrize("age,reserved", [(30, True), (60, True), (60.000001, False)])
+@pytest.mark.parametrize(
+    "age,reserved", [(30, True), (59, True), (60, True), (60.000001, False), (61, False)]
+)
 def test_postgres_reservation_boundary(
     pg_engine: Engine, pg_room: UUID, monkeypatch: pytest.MonkeyPatch, age: float, reserved: bool
 ) -> None:
@@ -226,7 +230,11 @@ def test_postgres_reservation_boundary(
     with Session(pg_engine) as db:
         repository.upsert_member(db, pg_room, user_id, "Quiet Otter", NOW - timedelta(seconds=age))
         db.commit()
-    monkeypatch.setattr(service, "generate_nickname", lambda taken: "Calm Fox")
+    monkeypatch.setattr(
+        service,
+        "generate_nickname",
+        lambda taken: next(name for name in ("Quiet Otter", "Calm Fox") if name not in taken),
+    )
     result = join(pg_engine, pg_room, user_id)
     assert result.nickname == ("Quiet Otter" if reserved else "Calm Fox")
 
@@ -282,7 +290,11 @@ def test_queued_join_samples_time_after_acquiring_lock(
     user_id = new_user(pg_engine)
     current_time = [NOW]
     monkeypatch.setattr(service, "utc_now", lambda: current_time[0])
-    monkeypatch.setattr(service, "generate_nickname", lambda taken: "Calm Fox")
+    monkeypatch.setattr(
+        service,
+        "generate_nickname",
+        lambda taken: next(name for name in ("Quiet Otter", "Calm Fox") if name not in taken),
+    )
     with Session(pg_engine) as blocker:
         repository.upsert_member(
             db=blocker,
@@ -354,7 +366,7 @@ def test_concurrent_heartbeat_cannot_revive_a_left_membership(
             pending = executor.submit(
                 heartbeat if leave_first else leave, pg_engine, pg_room, user_id
             )
-            wait_for_lock(pg_engine, "transactionid")
+            wait_for_lock(pg_engine, "advisory")
             assert not pending.done()
         finally:
             release.set()
@@ -558,3 +570,331 @@ def test_browser_roles_cannot_access_memberships(
                 {"room": pg_room, "user": user_id},
             )
         assert error.value.orig.sqlstate == "42501"
+
+
+def sweep(engine: Engine, room_id: UUID, session_id: UUID) -> None:
+    with Session(engine) as db:
+        service.sweep_room_presence(db, room_id)
+
+
+def test_count_events_see_committed_data_and_released_room_lock(
+    pg_engine: Engine,
+    pg_room: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+    publisher_client: TestClient,
+) -> None:
+    user_id = new_user(pg_engine)
+    monkeypatch.setattr(service, "utc_now", lambda: NOW)
+    events = []
+
+    async def record(_client, topic, event, payload):
+        with Session(pg_engine) as db:
+            # This connection must be able to take the lock while publishing is in
+            # progress, and see the membership and snapshot committed together.
+            assert db.scalar(
+                select(text("pg_try_advisory_xact_lock(:key)")).params(
+                    key=repository.room_lock_key(pg_room)
+                )
+            )
+            count = repository.participant_count(db, pg_room, service.presence_since(NOW))
+            assert db.get(RoomPresenceCount, pg_room).participant_count == count
+            assert payload["count"] == count
+        events.append((topic, event, payload))
+        return True
+
+    monkeypatch.setattr(presence, "publish", record)
+    join(pg_engine, pg_room, user_id)
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
+    join(pg_engine, pg_room, user_id)
+    heartbeat(pg_engine, pg_room, user_id)
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
+    leave(pg_engine, pg_room, user_id)
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
+    assert events == [
+        (f"room:{pg_room}", "presence.updated", {"count": 1}),
+        ("rooms", "room.count", {"room_id": str(pg_room), "count": 1}),
+        (f"room:{pg_room}", "presence.updated", {"count": 0}),
+        ("rooms", "room.count", {"room_id": str(pg_room), "count": 0}),
+    ]
+
+
+@pytest.mark.parametrize("operation", ["join", "heartbeat", "leave", "sweep"])
+@pytest.mark.parametrize("sweep_first", [False, True])
+def test_sweeper_serializes_with_membership_activity(
+    pg_engine: Engine,
+    pg_room: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    sweep_first: bool,
+    publisher_client: TestClient,
+) -> None:
+    user_id = new_user(pg_engine)
+    clock = [NOW]
+    monkeypatch.setattr(service, "utc_now", lambda: clock[0])
+    join(pg_engine, pg_room, user_id)
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
+    clock[0] += timedelta(seconds=31)
+    events = []
+
+    async def record(_client, *event):
+        events.append(event)
+        return True
+
+    monkeypatch.setattr(presence, "publish", record)
+    writing, release = Event(), Event()
+    original = repository.refresh_presence_count
+
+    def hold_observation(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if not writing.is_set():
+            writing.set()
+            assert release.wait(10), "Test did not release the first presence observation"
+        return result
+
+    monkeypatch.setattr(repository, "refresh_presence_count", hold_observation)
+    competing = {"join": join, "heartbeat": heartbeat, "leave": leave, "sweep": sweep}[operation]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(sweep if sweep_first else competing, pg_engine, pg_room, user_id)
+        try:
+            assert writing.wait(5)
+            second = executor.submit(
+                competing if sweep_first else sweep, pg_engine, pg_room, user_id
+            )
+            wait_for_lock(pg_engine, "advisory")
+            assert not second.done()
+            clock[0] += timedelta(seconds=1)
+        finally:
+            release.set()
+        first.result(timeout=5)
+        second.result(timeout=5)
+
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
+
+    allowed = [[0]] if operation in {"leave", "sweep"} else ([[], [0, 1]] if sweep_first else [[]])
+    for topic, event_name in ((f"room:{pg_room}", "presence.updated"), ("rooms", "room.count")):
+        payloads = [
+            payload for channel, name, payload in events if (channel, name) == (topic, event_name)
+        ]
+        observed = [payload["count"] for payload in payloads]
+        assert observed in allowed
+        assert ([1] + observed)[-1] == (0 if operation in {"leave", "sweep"} else 1)
+        for payload in payloads:
+            assert set(payload) == (
+                {"count"} if event_name == "presence.updated" else {"room_id", "count"}
+            )
+    assert len(events) == 2 * len(observed)
+    with Session(pg_engine) as db:
+        count = repository.participant_count(db, pg_room, service.presence_since(clock[0]))
+        assert count == (0 if operation in {"leave", "sweep"} else 1)
+        assert db.get(RoomPresenceCount, pg_room).participant_count == count
+        member = db.get(RoomMember, (pg_room, user_id))
+        assert (member.left_at is not None) == (operation == "leave")
+        if operation == "heartbeat":
+            assert member.last_seen_at == (clock[0] if sweep_first else NOW + timedelta(seconds=31))
+    # A fresh session must not repeat any timeout consumed by either transaction.
+    events.clear()
+    sweep(pg_engine, pg_room, user_id)
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
+    assert events == []
+
+
+@pytest.mark.parametrize("role", ["anon", "authenticated"])
+def test_presence_snapshot_migration_constraints_and_rls(
+    pg_engine: Engine, pg_room: UUID, role: str
+) -> None:
+    schema = inspect(pg_engine)
+    assert schema.get_pk_constraint("room_presence_counts")["constrained_columns"] == ["room_id"]
+    foreign_key = schema.get_foreign_keys("room_presence_counts")[0]
+    assert foreign_key["referred_table"] == "rooms"
+    assert foreign_key["options"]["ondelete"] == "CASCADE"
+    user_id = new_user(pg_engine)
+    join(pg_engine, pg_room, user_id)
+    with pg_engine.begin() as connection:
+        assert connection.scalar(
+            text(
+                "SELECT relrowsecurity FROM pg_class "
+                "WHERE oid = 'public.room_presence_counts'::regclass"
+            )
+        )
+        assert (
+            connection.scalar(
+                text(
+                    "SELECT count(*) FROM pg_policy "
+                    "WHERE polrelid = 'public.room_presence_counts'::regclass"
+                )
+            )
+            == 0
+        )
+    with pytest.raises(IntegrityError), pg_engine.begin() as connection:
+        connection.exec_driver_sql("UPDATE public.room_presence_counts SET participant_count = -1")
+    with pg_engine.connect() as connection:
+        connection.exec_driver_sql(f"SET LOCAL ROLE {role}")
+        assert connection.execute(text("SELECT * FROM public.room_presence_counts")).all() == []
+        assert (
+            connection.execute(
+                text("UPDATE public.room_presence_counts SET participant_count = 0")
+            ).rowcount
+            == 0
+        )
+        assert connection.execute(text("DELETE FROM public.room_presence_counts")).rowcount == 0
+        with pytest.raises(DBAPIError) as error:
+            connection.execute(
+                text(
+                    "INSERT INTO public.room_presence_counts (room_id, participant_count) "
+                    "VALUES (:room, 0)"
+                ),
+                {"room": pg_room},
+            )
+        assert error.value.orig.sqlstate == "42501"
+
+
+@pytest.mark.parametrize("fail_first_publish", [False, True])
+def test_slow_publisher_preserves_order_without_holding_database_locks(
+    pg_engine: Engine,
+    pg_room: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_first_publish: bool,
+    publisher_client: TestClient,
+) -> None:
+    users = [new_user(pg_engine) for _ in range(3)]
+    with pg_engine.begin() as connection:
+        other_room = connection.scalar(
+            text(
+                "INSERT INTO public.rooms (name, description, category, latitude, longitude) "
+                "VALUES (:name, 'Other room', 'library', 29.65, -82.34) RETURNING id"
+            ),
+            {"name": str(uuid4())},
+        )
+    monkeypatch.setattr(service, "utc_now", lambda: NOW)
+    publishing, second_committed = Event(), Event()
+    release = publisher_client.portal.call(asyncio.Event)
+    events = []
+
+    async def record(_client, topic, name, payload):
+        if topic == f"room:{pg_room}" and payload["count"] == 1:
+            publishing.set()
+            await release.wait()
+            if fail_first_publish:
+                raise RuntimeError("test first-channel failure")
+        events.append((topic, name, payload))
+        return True
+
+    def second_join():
+        with Session(pg_engine) as db:
+            event.listen(db, "after_commit", lambda session: second_committed.set())
+            return service.join_room(db, str(users[1]), pg_room)
+
+    monkeypatch.setattr(presence, "publish", record)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        first = executor.submit(join, pg_engine, pg_room, users[0])
+        try:
+            assert publishing.wait(5)
+            assert first.result(timeout=2).nickname
+            second = executor.submit(second_join)
+            assert second_committed.wait(5), "A slow publisher blocked the next transaction"
+            assert second.result(timeout=2).nickname
+            other = executor.submit(join, pg_engine, other_room, users[2])
+            assert other.result(timeout=5).nickname
+            with Session(pg_engine) as db:
+                assert db.scalar(
+                    select(text("pg_try_advisory_xact_lock(:key)")).params(
+                        key=repository.room_lock_key(pg_room)
+                    )
+                )
+                assert db.get(RoomPresenceCount, pg_room).participant_count == 2
+                assert repository.participant_count(db, pg_room, service.presence_since(NOW)) == 2
+        finally:
+            publisher_client.portal.call(release.set)
+        assert first.result(timeout=5).nickname
+        assert second.result(timeout=5).nickname
+    publisher_client.portal.call(publisher_client.app.state.presence_publisher.wait_idle)
+    events = [
+        item
+        for item in events
+        if item[0] == f"room:{pg_room}" or item[2].get("room_id") == str(pg_room)
+    ]
+    expected = [
+        (f"room:{pg_room}", "presence.updated", {"count": 1}),
+        ("rooms", "room.count", {"room_id": str(pg_room), "count": 1}),
+        (f"room:{pg_room}", "presence.updated", {"count": 2}),
+        ("rooms", "room.count", {"room_id": str(pg_room), "count": 2}),
+    ]
+    assert events == (expected[1:] if fail_first_publish else expected)
+
+
+@pytest.mark.parametrize("newer_operation", ["join", "leave"])
+def test_delayed_post_commit_notification_cannot_overwrite_newer_committed_state(
+    pg_engine: Engine, pg_room: UUID, monkeypatch, publisher_client: TestClient, newer_operation
+) -> None:
+    users = [new_user(pg_engine) for _ in range(2)]
+    delayed, release = Event(), Event()
+    sent = []
+    original = presence.PendingCount.notify_committed
+
+    def notify(update):
+        if update.room_id == pg_room and update.count == 1 and not delayed.is_set():
+            delayed.set()
+            assert release.wait(10), "Test did not release the older committed notification"
+        original(update)
+
+    async def record(_client, topic, event_name, payload):
+        sent.append((topic, event_name, payload))
+        return True
+
+    monkeypatch.setattr(presence.PendingCount, "notify_committed", notify)
+    monkeypatch.setattr(presence, "publish", record)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(join, pg_engine, pg_room, users[0])
+        try:
+            assert delayed.wait(5)
+            if newer_operation == "join":
+                executor.submit(join, pg_engine, pg_room, users[1]).result(timeout=2)
+                final_count = 2
+            else:
+                executor.submit(leave, pg_engine, pg_room, users[0]).result(timeout=2)
+                final_count = 0
+            worker = publisher_client.app.state.presence_publisher
+            publisher_client.portal.call(worker.wait_idle)
+            expected = [
+                (f"room:{pg_room}", "presence.updated", {"count": final_count}),
+                ("rooms", "room.count", {"room_id": str(pg_room), "count": final_count}),
+            ]
+            assert sent == expected
+        finally:
+            release.set()
+        first.result(timeout=2)
+    publisher_client.portal.call(worker.wait_idle)
+    assert sent == expected
+
+
+def test_fifty_joins_finish_before_blocked_publisher_is_released(
+    pg_engine: Engine, pg_room: UUID, monkeypatch, publisher_client: TestClient
+) -> None:
+    users = [new_user(pg_engine) for _ in range(50)]
+    started = Event()
+    release = publisher_client.portal.call(asyncio.Event)
+    sent = []
+
+    async def blocked(_client, topic, event_name, payload):
+        started.set()
+        await release.wait()
+        sent.append((topic, event_name, payload))
+        return True
+
+    monkeypatch.setattr(presence, "publish", blocked)
+    with ThreadPoolExecutor(max_workers=50) as executor:
+        requests = [executor.submit(join, pg_engine, pg_room, user) for user in users]
+        try:
+            assert started.wait(5)
+            results = [request.result(timeout=5) for request in requests]
+            assert len({result.nickname for result in results}) == 50
+            assert not release.is_set()
+            worker = publisher_client.app.state.presence_publisher
+            assert len(worker._pending) <= 1
+        finally:
+            publisher_client.portal.call(release.set)
+    publisher_client.portal.call(worker.wait_idle)
+    assert sent[-2:] == [
+        (f"room:{pg_room}", "presence.updated", {"count": 50}),
+        ("rooms", "room.count", {"room_id": str(pg_room), "count": 50}),
+    ]
