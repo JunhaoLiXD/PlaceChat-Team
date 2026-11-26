@@ -124,7 +124,7 @@ function MessageBubble({
       setReportError(
         caught instanceof Error
           ? caught.message
-          : "We couldnâ€™t submit this report.",
+          : "We couldn’t submit this report.",
       );
     } finally {
       setIsSubmittingReport(false);
@@ -189,7 +189,7 @@ function MessageBubble({
                     disabled={isSubmittingReport}
                     className="min-h-9 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600 disabled:cursor-wait disabled:opacity-60"
                   >
-                    {isSubmittingReport ? "Submittingâ€¦" : "Submit report"}
+                    {isSubmittingReport ? "Submitting…" : "Submit report"}
                   </button>
                   <button
                     type="button"
@@ -587,7 +587,8 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
   };
 
   return (
-    <main className="flex min-h-screen flex-col bg-slate-100/80">
+    // One screen tall: the header and composer stay put and only the message list scrolls.
+    <main className="flex h-dvh flex-col overflow-hidden bg-slate-100/80">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between gap-4 px-4 sm:px-6">
           <Link
@@ -632,7 +633,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
       </header>
 
       <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col p-3 sm:p-6">
-        <section className="flex min-h-[calc(100vh-5.5rem)] flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 shadow-xl shadow-slate-200/70 sm:min-h-[calc(100vh-7rem)]">
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 shadow-xl shadow-slate-200/70">
           <div className="flex min-h-14 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 sm:px-6">
             <div className="min-w-0">
               {joinError ? (
