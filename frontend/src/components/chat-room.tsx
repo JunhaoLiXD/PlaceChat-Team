@@ -124,7 +124,7 @@ function MessageBubble({
       setReportError(
         caught instanceof Error
           ? caught.message
-          : "We couldnâ€™t submit this report.",
+          : "We couldn’t submit this report.",
       );
     } finally {
       setIsSubmittingReport(false);
@@ -189,7 +189,7 @@ function MessageBubble({
                     disabled={isSubmittingReport}
                     className="min-h-9 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600 disabled:cursor-wait disabled:opacity-60"
                   >
-                    {isSubmittingReport ? "Submittingâ€¦" : "Submit report"}
+                    {isSubmittingReport ? "Submitting…" : "Submit report"}
                   </button>
                   <button
                     type="button"
