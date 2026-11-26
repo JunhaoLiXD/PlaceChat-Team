@@ -158,6 +158,25 @@ test("shows API action failures without dropping the report", async () => {
   expect(screen.getByText("An unsafe message")).toBeDefined();
 });
 
+test("reloads the queue when another admin already handled a report", async () => {
+  mocks.remove.mockRejectedValue(
+    new ApiRequestError("The report was not found.", 404, "NOT_FOUND"),
+  );
+  render(<AdminReportManager />);
+  await screen.findByText("An unsafe message");
+  mocks.list.mockResolvedValueOnce([secondReport]);
+
+  fireEvent.click(
+    screen.getByRole("button", { name: "Remove message from Quiet Otter" }),
+  );
+
+  await waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(2));
+  expect(screen.queryByText("An unsafe message")).toBeNull();
+  expect(screen.getByText("Another reported message")).toBeDefined();
+  expect(screen.getByText("1 pending")).toBeDefined();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
 test("shows the protected-page message to a non-admin", async () => {
   mocks.list.mockRejectedValue(
     new ApiRequestError("You are not allowed to do this.", 403, "FORBIDDEN"),

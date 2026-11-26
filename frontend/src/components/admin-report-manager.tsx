@@ -31,7 +31,7 @@ function formatReportTime(value: string) {
 function errorMessage(caught: unknown) {
   return caught instanceof Error
     ? caught.message
-    : "We couldnâ€™t update the report queue.";
+    : "We couldn't update the report queue.";
 }
 
 export function AdminReportManager() {
@@ -134,6 +134,9 @@ export function AdminReportManager() {
         (caught.status === 401 || caught.status === 403)
       ) {
         setNotAuthorized(true);
+      } else if (caught instanceof ApiRequestError && caught.status === 404) {
+        setIsRefreshing(true);
+        void loadReports();
       } else {
         setActionError(errorMessage(caught));
       }
@@ -179,7 +182,7 @@ export function AdminReportManager() {
         <div className="flex items-center gap-3">
           {isRefreshing ? (
             <span role="status" className="text-xs text-slate-400">
-              Refreshingâ€¦
+              Refreshing…
             </span>
           ) : null}
           <span className="rounded-full border border-white/10 bg-white/[0.07] px-3 py-1.5 text-sm font-bold text-white">
@@ -271,7 +274,7 @@ export function AdminReportManager() {
                       className="min-h-11 rounded-xl bg-rose-500 px-4 text-sm font-bold text-white transition hover:bg-rose-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-300 disabled:cursor-wait disabled:opacity-60"
                     >
                       {isBusy && busyAction.action === "remove"
-                        ? "Removingâ€¦"
+                        ? "Removing…"
                         : "Remove message"}
                     </button>
                     <button
@@ -282,7 +285,7 @@ export function AdminReportManager() {
                       className="min-h-11 rounded-xl border border-white/15 px-4 text-sm font-bold text-white transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-violet-300 disabled:cursor-wait disabled:opacity-60"
                     >
                       {isBusy && busyAction.action === "dismiss"
-                        ? "Dismissingâ€¦"
+                        ? "Dismissing…"
                         : "Dismiss"}
                     </button>
                     <button
