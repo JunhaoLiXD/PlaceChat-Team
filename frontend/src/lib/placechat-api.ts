@@ -22,6 +22,7 @@ export class ApiRequestError extends Error {
     message: string,
     public readonly status: number,
     public readonly code?: string,
+    public readonly until?: string,
   ) {
     super(message);
     this.name = "ApiRequestError";
@@ -72,6 +73,7 @@ async function apiFetch<T>(
       body?.error?.message ?? "Something went wrong. Please try again.",
       response.status,
       body?.error?.code,
+      typeof body?.error?.until === "string" ? body.error.until : undefined,
     );
   }
 

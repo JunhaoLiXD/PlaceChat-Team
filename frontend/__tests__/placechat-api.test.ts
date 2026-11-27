@@ -7,9 +7,14 @@ vi.mock("@/lib/session", () => ({
 vi.mock("@/lib/config", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/config")>()),
   publicConfig: { apiBaseUrl: "http://api.test" },
+  shouldUseMocks: () => false,
 }));
 
-import { deleteBlockedWord } from "@/lib/placechat-api";
+import {
+  ApiRequestError,
+  deleteBlockedWord,
+  sendRoomMessage,
+} from "@/lib/placechat-api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -30,3 +35,35 @@ test("a 204 No Content response resolves without parsing a body", async () => {
     }),
   );
 });
+
+test.each(["2026-11-27T12:15:00Z", undefined, 42])(
+  "carries a string error.until through ApiRequestError (%s)",
+  async (until) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "BLOCKED",
+              message: "Temporarily blocked.",
+              until,
+            },
+          }),
+          { status: 403 },
+        ),
+      ),
+    );
+
+    const error = await sendRoomMessage("room-1", "draft", "Quiet Otter").catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({
+      status: 403,
+      code: "BLOCKED",
+      message: "Temporarily blocked.",
+      until: typeof until === "string" ? until : undefined,
+    });
+  },
+);

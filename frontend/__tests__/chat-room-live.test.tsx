@@ -164,6 +164,229 @@ function deferResponse() {
   return { promise, resolve };
 }
 
+const BLOCK_START = Date.parse("2026-11-27T12:00:00Z");
+const BLOCK_END = new Date(BLOCK_START + 60_000).toISOString();
+const BLOCK_MESSAGE = "Your session is temporarily blocked.";
+const BLOCK_DRAFT = "  Keep this draft  ";
+
+async function blockedComposer(
+  until: unknown = BLOCK_END,
+  response?: Promise<Response>,
+  status = 403,
+  code = "BLOCKED",
+) {
+  vi.useFakeTimers();
+  vi.setSystemTime(BLOCK_START);
+  const page = (mode: "visible" | "hidden", currentRoom = room) => (
+    <Activity mode={mode}>
+      <ChatRoom room={currentRoom} />
+    </Activity>
+  );
+  const view = render(page("visible"));
+  await act(async () => {});
+  const normalFetch = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation((input, init) =>
+    String(input).endsWith("/messages") && init?.method === "POST"
+      ? (response ??
+        Promise.resolve(
+          json({ error: { code, message: BLOCK_MESSAGE, until } }, status),
+        ))
+      : normalFetch(input, init),
+  );
+  const input = screen.getByLabelText("Message Library West");
+  fireEvent.change(input, { target: { value: BLOCK_DRAFT } });
+  await act(async () => {
+    fireEvent.keyDown(input, { key: "Enter" });
+  });
+  return {
+    view,
+    page,
+    input,
+    allowSending: () => fetchMock.mockImplementation(normalFetch),
+  };
+}
+
+function messagePosts() {
+  return requestsTo("/messages").filter(([, init]) => init?.method === "POST");
+}
+
+test("a block keeps the draft and prevents sending until the exact expiry", async () => {
+  const { input, allowSending } = await blockedComposer();
+  const notice = screen.getByRole("alert");
+  expect(notice.textContent).toContain(BLOCK_MESSAGE);
+  expect(notice.textContent).toContain("You can send again at");
+  expect(notice.querySelector("time")).toHaveProperty("dateTime", BLOCK_END);
+  expect(notice.querySelector("time")?.textContent).toBeTruthy();
+  expect(input).toHaveProperty("value", BLOCK_DRAFT);
+  expect(input).toHaveProperty("disabled", false);
+  const send = screen.getByRole("button", { name: "Send" });
+  expect(send).toHaveProperty("disabled", true);
+
+  fireEvent.click(send);
+  fireEvent.keyDown(input, { key: "Enter" });
+  fireEvent.submit(input.closest("form")!);
+  fireEvent.change(input, { target: { value: "An edited draft" } });
+  expect(screen.getByRole("alert").textContent).toContain(BLOCK_MESSAGE);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(59_999);
+  });
+  expect(send).toHaveProperty("disabled", true);
+  expect(messagePosts()).toHaveLength(1);
+
+  allowSending();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
+  });
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(send).toHaveProperty("disabled", false);
+  expect(input).toHaveProperty("value", "An edited draft");
+  expect(messagePosts()).toHaveLength(1);
+  await act(async () => {
+    fireEvent.keyDown(input, { key: "Enter" });
+  });
+  expect(messagePosts()).toHaveLength(2);
+  expect(screen.getByText("An edited draft", { selector: "p" })).toBeDefined();
+  expect(input).toHaveProperty("value", "");
+});
+
+test.each([
+  undefined,
+  null,
+  "",
+  "not-a-date",
+  "2026-11-26T12:00:00Z",
+  "2026-11-27T12:00:00Z",
+  42,
+])(
+  "a BLOCKED response without a future expiry keeps sending available (%s)",
+  async (until) => {
+    // An explicit missing field must not use the fixture's default expiry.
+    const response = Promise.resolve(
+      json({ error: { code: "BLOCKED", message: BLOCK_MESSAGE, until } }, 403),
+    );
+    const { input, allowSending } = await blockedComposer(until, response);
+    expect(screen.getByRole("alert").textContent).toBe(BLOCK_MESSAGE);
+    expect(screen.getByRole("alert").querySelector("time")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(input).toHaveProperty("value", BLOCK_DRAFT);
+    allowSending();
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(input).toHaveProperty("value", "");
+  },
+);
+
+test.each([
+  [422, "BLOCKED"],
+  [403, "FORBIDDEN"],
+] as const)(
+  "other errors with an expiry do not disable sending (%i %s)",
+  async (status, code) => {
+    await blockedComposer(BLOCK_END, undefined, status, code);
+    expect(screen.getByRole("alert").textContent).toBe(BLOCK_MESSAGE);
+    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+  },
+);
+
+test("visibility recovery checks the current clock when background timers have not fired", async () => {
+  const { input } = await blockedComposer();
+  const visibility = vi.spyOn(document, "visibilityState", "get");
+  vi.setSystemTime(BLOCK_START + 60_001);
+  visibility.mockReturnValue("hidden");
+  fireEvent(document, new Event("visibilitychange"));
+  expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  visibility.mockReturnValue("visible");
+  fireEvent(document, new Event("visibilitychange"));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+    "disabled",
+    false,
+  );
+  expect(input).toHaveProperty("value", BLOCK_DRAFT);
+});
+
+test.each([30_000, 60_000])(
+  "an Activity return reschedules expiry using the current time (%i ms)",
+  async (elapsed) => {
+    const { view, page, input } = await blockedComposer();
+    view.rerender(page("hidden"));
+    expect(vi.getTimerCount()).toBe(0);
+    vi.setSystemTime(BLOCK_START + elapsed);
+    await act(async () => {
+      view.rerender(page("visible"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(input).toHaveProperty("value", BLOCK_DRAFT);
+    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+      "disabled",
+      elapsed < 60_000,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000 - elapsed);
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+  },
+);
+
+test.each(["Activity", "room change"])(
+  "a late BLOCKED response cannot disable a new visit (%s)",
+  async (navigation) => {
+    const pending = deferResponse();
+    const { view, page, allowSending } = await blockedComposer(
+      BLOCK_END,
+      pending.promise,
+    );
+    allowSending();
+    const currentRoom =
+      navigation === "room change"
+        ? { ...room, id: "another-room", name: "Marston" }
+        : room;
+    if (navigation === "Activity") view.rerender(page("hidden"));
+    await act(async () => {
+      view.rerender(page("visible", currentRoom));
+    });
+    await act(async () => {
+      pending.resolve(
+        json(
+          {
+            error: {
+              code: "BLOCKED",
+              message: BLOCK_MESSAGE,
+              until: BLOCK_END,
+            },
+          },
+          403,
+        ),
+      );
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(screen.getByLabelText(`Message ${currentRoom.name}`)).toHaveProperty(
+      "value",
+      BLOCK_DRAFT,
+    );
+  },
+);
+
 async function rejoinActivityWithDraft() {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const page = (mode: "visible" | "hidden") => (

@@ -34,8 +34,7 @@ On `/admin/reports`, **Block sender** opens a duration selector with **15 minute
 **1 hour**, and **24 hours**. Confirming uses the protected API and displays the
 effective expiration in Eastern Time. Blocking applies across all rooms and leaves
 the report available for separate removal or dismissal. Controls stay disabled while
-the request is pending; failures are shown with retry available. The chat composer's
-expiry display and automatic re-enable behavior remain in PBI-43 (#78).
+the request is pending; failures are shown with retry available.
 
 **Pending live check after deployment:** In two independent browser profiles, have a
 sender join two rooms and post in one. Report that message from the other profile.
@@ -44,6 +43,27 @@ the confirmation. In the sender's profile, posting in either joined room must re
 403 `BLOCKED` with `error.until`; the reporter must still be able to send. Confirm
 the sender's API request succeeds after expiration. Automated tests control the
 clock to cover the exact boundary without waiting 15 minutes.
+
+### Composer block expiry (PBI-43)
+
+A 403 `BLOCKED` response with a valid future `error.until` shows the server's
+message and the end time in the browser's local time zone. The draft stays editable
+and is preserved; Send, Enter, and direct form submission cannot post until the
+deadline. The notice clears and sending becomes available automatically at expiry,
+subject to the existing room-join and message-validation rules. Nothing is sent
+automatically. Missing, invalid, or expired deadlines show the server message and
+allow retrying.
+
+The room visit owns the deadline timer and visibility listener. Returning to a
+visible tab or a kept-alive room checks the current clock, so background timer
+throttling cannot leave sending disabled. Leave, room changes, and cleanup stop
+the old timer/listener; old send responses cannot change a later visit. A known
+block remains in effect when returning to the same room before its deadline.
+
+**Pending live expiry check:** Keep a draft after a blocked send, confirm the end
+time and disabled Send/Enter, then wait until expiry without refreshing. The notice
+should clear and the same draft should send normally. Repeat with the tab hidden
+past expiry and with navigation away from and back to the room.
 
 Opening `/rooms/[roomId]` loads that room and rejoins with the persisted session, displaying the nickname returned by the backend. Refreshing, closing/reopening a tab in the same browser profile, disconnecting, and React cleanup never sign out, clear stored authentication, or send Leave. The backend retains a nickname through exactly 60 seconds after the last successful join/heartbeat while `left_at` is null; after that, it assigns a different name. A different browser profile/private session has its own identity.
 
