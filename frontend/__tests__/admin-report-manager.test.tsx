@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   remove: vi.fn(),
   dismiss: vi.fn(),
+  block: vi.fn(),
 }));
 
 vi.mock("@/lib/placechat-api", async (importOriginal) => ({
@@ -27,6 +28,7 @@ vi.mock("@/lib/placechat-api", async (importOriginal) => ({
   listAdminReports: mocks.list,
   removeReportedMessage: mocks.remove,
   dismissAdminReport: mocks.dismiss,
+  blockReportedSender: mocks.block,
 }));
 
 const firstReport: AdminReport = {
@@ -67,6 +69,11 @@ beforeEach(() => {
   mocks.list.mockResolvedValue([firstReport, secondReport]);
   mocks.remove.mockResolvedValue(undefined);
   mocks.dismiss.mockResolvedValue(undefined);
+  mocks.block.mockResolvedValue({
+    id: "block-1",
+    created_at: "2026-11-27T14:00:00Z",
+    expires_at: "2026-11-27T15:00:00Z",
+  });
 });
 
 afterEach(cleanup);
@@ -190,4 +197,152 @@ test("shows the protected-page message to a non-admin", async () => {
   expect(
     screen.getByRole("link", { name: /return to admin sign in/i }),
   ).toHaveProperty("href", expect.stringContaining("/admin/login"));
+});
+
+test.each([15, 60, 1440] as const)(
+  "blocks the reported sender for %i minutes and keeps the report available",
+  async (minutes) => {
+    render(<AdminReportManager />);
+    await screen.findByText("An unsafe message");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Block sender Quiet Otter" }),
+    );
+
+    const duration = screen.getByRole("combobox", { name: "Block duration" });
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["15 minutes", "1 hour", "24 hours"]);
+    fireEvent.change(duration, { target: { value: String(minutes) } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm block" }));
+
+    await waitFor(() =>
+      expect(mocks.block).toHaveBeenCalledWith("report-1", minutes),
+    );
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Quiet Otter is blocked from sending in all rooms until Nov 27, 2026, 10:00 AM Eastern Time.",
+    );
+    expect(screen.getByText("An unsafe message")).toBeDefined();
+    expect(screen.getByText("2 pending")).toBeDefined();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(mocks.remove).not.toHaveBeenCalled();
+    expect(mocks.dismiss).not.toHaveBeenCalled();
+  },
+);
+
+test("cancels blocking without sending a request", async () => {
+  render(<AdminReportManager />);
+  await screen.findByText("An unsafe message");
+  fireEvent.click(
+    screen.getByRole("button", { name: "Block sender Quiet Otter" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(mocks.block).not.toHaveBeenCalled();
+});
+
+test("shows block failures and permits retrying with the selected duration", async () => {
+  mocks.block.mockRejectedValueOnce(
+    new ApiRequestError("The server is unavailable.", 0),
+  );
+  render(<AdminReportManager />);
+  await screen.findByText("An unsafe message");
+  fireEvent.click(
+    screen.getByRole("button", { name: "Block sender Quiet Otter" }),
+  );
+  fireEvent.change(screen.getByRole("combobox"), { target: { value: "1440" } });
+  fireEvent.click(screen.getByRole("button", { name: "Confirm block" }));
+
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "The server is unavailable.",
+  );
+  expect(screen.getByRole("combobox")).toHaveProperty("value", "1440");
+  fireEvent.click(screen.getByRole("button", { name: "Confirm block" }));
+  await screen.findByRole("status");
+  expect(mocks.block).toHaveBeenNthCalledWith(2, "report-1", 1440);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("locks moderation controls while a block is pending", async () => {
+  let resolve!: (block: { expires_at: string }) => void;
+  mocks.block.mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  render(<AdminReportManager />);
+  await screen.findByText("An unsafe message");
+  fireEvent.click(
+    screen.getByRole("button", { name: "Block sender Calm Fox" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Confirm block" }));
+  expect(screen.getByRole("button", { name: "Blocking…" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(screen.getByRole("combobox")).toHaveProperty("disabled", true);
+  expect(
+    screen.getByRole("button", { name: "Remove message from Quiet Otter" }),
+  ).toHaveProperty("disabled", true);
+  expect(mocks.block).toHaveBeenCalledTimes(1);
+  await act(async () => resolve({ expires_at: "2026-11-27T15:00:00Z" }));
+  expect(screen.getByRole("status").textContent).toMatch(
+    /^Calm Fox is blocked/,
+  );
+});
+
+test.each([401, 403])(
+  "shows revoked access after a block returns %i",
+  async (status) => {
+    mocks.block.mockRejectedValueOnce(
+      new ApiRequestError("Access denied", status),
+    );
+    render(<AdminReportManager />);
+    await screen.findByText("An unsafe message");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Block sender Quiet Otter" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Confirm block" }));
+    expect(
+      await screen.findByRole("heading", { name: "Not authorized" }),
+    ).toBeDefined();
+    expect(screen.queryByText("An unsafe message")).toBeNull();
+  },
+);
+
+test("refreshes a missing report and explains the failed block", async () => {
+  mocks.block.mockRejectedValueOnce(new ApiRequestError("Missing report", 404));
+  render(<AdminReportManager />);
+  await screen.findByText("An unsafe message");
+  mocks.list.mockResolvedValueOnce([secondReport]);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Block sender Quiet Otter" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Confirm block" }));
+  expect((await screen.findByRole("alert")).textContent).toMatch(
+    /no longer available/,
+  );
+  await waitFor(() =>
+    expect(screen.queryByText("An unsafe message")).toBeNull(),
+  );
+  expect(screen.getByText("1 pending")).toBeDefined();
+});
+
+test("ignores a late block result after administrator sign-out", async () => {
+  let resolve!: (block: { expires_at: string }) => void;
+  mocks.block.mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  render(<AdminReportManager />);
+  await screen.findByText("An unsafe message");
+  fireEvent.click(
+    screen.getByRole("button", { name: "Block sender Quiet Otter" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Confirm block" }));
+  mocks.list.mockRejectedValueOnce(new ApiRequestError("Signed out", 401));
+  act(() => window.dispatchEvent(new Event(ADMIN_SIGNED_OUT_EVENT)));
+  await screen.findByRole("heading", { name: "Not authorized" });
+  await act(async () => resolve({ expires_at: "2026-11-27T15:00:00Z" }));
+  expect(screen.queryByRole("status")).toBeNull();
 });

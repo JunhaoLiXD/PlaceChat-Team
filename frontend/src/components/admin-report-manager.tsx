@@ -6,13 +6,27 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ADMIN_SIGNED_OUT_EVENT } from "@/lib/admin-auth";
 import {
   ApiRequestError,
+  blockReportedSender,
   dismissAdminReport,
   listAdminReports,
   removeReportedMessage,
 } from "@/lib/placechat-api";
-import type { AdminReport } from "@/lib/placechat-types";
+import type { AdminReport, BlockDurationMinutes } from "@/lib/placechat-types";
 
 export const ADMIN_REPORT_REFRESH_MS = 30_000;
+
+const BLOCK_DURATIONS = [
+  { minutes: 15, label: "15 minutes" },
+  { minutes: 60, label: "1 hour" },
+  { minutes: 1440, label: "24 hours" },
+] as const satisfies ReadonlyArray<{
+  minutes: BlockDurationMinutes;
+  label: string;
+}>;
+
+type ReportAction =
+  | { type: "remove" | "dismiss" }
+  | { type: "block"; durationMinutes: BlockDurationMinutes };
 
 const REASON_LABELS: Record<NonNullable<AdminReport["reason"]>, string> = {
   harassment: "Harassment",
@@ -40,13 +54,19 @@ export function AdminReportManager() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [blockSelection, setBlockSelection] = useState<{
+    reportId: string;
+    durationMinutes: BlockDurationMinutes;
+  } | null>(null);
   const [notAuthorized, setNotAuthorized] = useState(false);
   const [busyAction, setBusyAction] = useState<{
     reportId: string;
-    action: "remove" | "dismiss";
+    action: ReportAction["type"];
   } | null>(null);
   const mountedRef = useRef(false);
   const latestRequestRef = useRef(0);
+  const actionVersionRef = useRef(0);
 
   const loadReports = useCallback(async () => {
     const requestId = ++latestRequestRef.current;
@@ -79,9 +99,12 @@ export function AdminReportManager() {
     mountedRef.current = true;
     const handleAdminSignOut = () => {
       latestRequestRef.current += 1;
+      actionVersionRef.current += 1;
       setReports([]);
       setLoadError(null);
       setActionError(null);
+      setActionSuccess(null);
+      setBlockSelection(null);
       setBusyAction(null);
       setNotAuthorized(false);
       setIsLoading(true);
@@ -100,23 +123,36 @@ export function AdminReportManager() {
     return () => {
       mountedRef.current = false;
       latestRequestRef.current += 1;
+      actionVersionRef.current += 1;
       window.clearTimeout(initialRequest);
       window.clearInterval(interval);
       window.removeEventListener(ADMIN_SIGNED_OUT_EVENT, handleAdminSignOut);
     };
   }, [loadReports]);
 
-  const handleAction = async (
-    report: AdminReport,
-    action: "remove" | "dismiss",
-  ) => {
+  const handleAction = async (report: AdminReport, action: ReportAction) => {
     if (busyAction) return;
-    setBusyAction({ reportId: report.id, action });
+    const version = actionVersionRef.current;
+    const isCurrent = () =>
+      mountedRef.current && version === actionVersionRef.current;
+    setBusyAction({ reportId: report.id, action: action.type });
     setActionError(null);
+    setActionSuccess(null);
 
     try {
-      if (action === "remove") {
+      if (action.type === "block") {
+        const block = await blockReportedSender(
+          report.id,
+          action.durationMinutes,
+        );
+        if (!isCurrent()) return;
+        setBlockSelection(null);
+        setActionSuccess(
+          `${report.message.nickname} is blocked from sending in all rooms until ${formatReportTime(block.expires_at)} Eastern Time.`,
+        );
+      } else if (action.type === "remove") {
         await removeReportedMessage(report.id);
+        if (!isCurrent()) return;
         setReports((current) =>
           current.filter(
             (candidate) => candidate.message.id !== report.message.id,
@@ -124,24 +160,31 @@ export function AdminReportManager() {
         );
       } else {
         await dismissAdminReport(report.id);
+        if (!isCurrent()) return;
         setReports((current) =>
           current.filter((candidate) => candidate.id !== report.id),
         );
       }
     } catch (caught) {
+      if (!isCurrent()) return;
       if (
         caught instanceof ApiRequestError &&
         (caught.status === 401 || caught.status === 403)
       ) {
         setNotAuthorized(true);
       } else if (caught instanceof ApiRequestError && caught.status === 404) {
+        setBlockSelection(null);
+        if (action.type === "block")
+          setActionError(
+            "This report is no longer available. Refreshing the queue.",
+          );
         setIsRefreshing(true);
         void loadReports();
       } else {
         setActionError(errorMessage(caught));
       }
     } finally {
-      setBusyAction(null);
+      if (isCurrent()) setBusyAction(null);
     }
   };
 
@@ -219,6 +262,15 @@ export function AdminReportManager() {
         </p>
       ) : null}
 
+      {actionSuccess ? (
+        <p
+          role="status"
+          className="mt-6 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100"
+        >
+          {actionSuccess}
+        </p>
+      ) : null}
+
       {isLoading ? (
         <div aria-label="Loading reports" className="mt-8 space-y-4">
           {Array.from({ length: 3 }, (_, index) => (
@@ -269,7 +321,9 @@ export function AdminReportManager() {
                     <button
                       type="button"
                       disabled={busyAction !== null}
-                      onClick={() => void handleAction(report, "remove")}
+                      onClick={() =>
+                        void handleAction(report, { type: "remove" })
+                      }
                       aria-label={`Remove message from ${report.message.nickname}`}
                       className="min-h-11 rounded-xl bg-rose-500 px-4 text-sm font-bold text-white transition hover:bg-rose-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-300 disabled:cursor-wait disabled:opacity-60"
                     >
@@ -280,7 +334,9 @@ export function AdminReportManager() {
                     <button
                       type="button"
                       disabled={busyAction !== null}
-                      onClick={() => void handleAction(report, "dismiss")}
+                      onClick={() =>
+                        void handleAction(report, { type: "dismiss" })
+                      }
                       aria-label={`Dismiss report for ${report.message.nickname}`}
                       className="min-h-11 rounded-xl border border-white/15 px-4 text-sm font-bold text-white transition hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-violet-300 disabled:cursor-wait disabled:opacity-60"
                     >
@@ -290,13 +346,95 @@ export function AdminReportManager() {
                     </button>
                     <button
                       type="button"
-                      disabled
-                      title="Temporary blocks are added in PBI-42"
-                      className="min-h-11 rounded-xl border border-dashed border-white/10 px-4 text-sm font-semibold text-slate-500"
+                      disabled={busyAction !== null}
+                      aria-label={`Block sender ${report.message.nickname}`}
+                      aria-expanded={blockSelection?.reportId === report.id}
+                      aria-controls={`block-${report.id}`}
+                      onClick={() => {
+                        setActionError(null);
+                        setActionSuccess(null);
+                        setBlockSelection((current) =>
+                          current?.reportId === report.id
+                            ? null
+                            : { reportId: report.id, durationMinutes: 15 },
+                        );
+                      }}
+                      className="min-h-11 rounded-xl border border-amber-300/25 bg-amber-400/10 px-4 text-sm font-bold text-amber-100 transition hover:bg-amber-400/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300 disabled:cursor-wait disabled:opacity-60"
                     >
                       Block sender
                     </button>
                   </div>
+                  {blockSelection?.reportId === report.id ? (
+                    <form
+                      id={`block-${report.id}`}
+                      aria-label={`Block ${report.message.nickname}`}
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void handleAction(report, {
+                          type: "block",
+                          durationMinutes: blockSelection.durationMinutes,
+                        });
+                      }}
+                      className="mt-4 rounded-2xl border border-amber-300/20 bg-slate-950/40 p-4"
+                    >
+                      <p className="text-sm leading-6 text-slate-300">
+                        Prevent this sender from posting in every room. Blocks
+                        cannot be lifted early. The message and report stay in
+                        the queue for review.
+                      </p>
+                      <label
+                        htmlFor={`duration-${report.id}`}
+                        className="mt-3 block text-sm font-semibold text-white"
+                      >
+                        Block duration
+                      </label>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <select
+                          id={`duration-${report.id}`}
+                          value={blockSelection.durationMinutes}
+                          disabled={busyAction !== null}
+                          onChange={(event) => {
+                            const duration = BLOCK_DURATIONS.find(
+                              (option) =>
+                                option.minutes === Number(event.target.value),
+                            );
+                            if (duration)
+                              setBlockSelection({
+                                reportId: report.id,
+                                durationMinutes: duration.minutes,
+                              });
+                          }}
+                          className="min-h-11 rounded-xl border border-white/15 bg-slate-900 px-3 text-sm text-white focus-visible:outline-2 focus-visible:outline-amber-300 disabled:opacity-60"
+                        >
+                          {BLOCK_DURATIONS.map((duration) => (
+                            <option
+                              key={duration.minutes}
+                              value={duration.minutes}
+                            >
+                              {duration.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="submit"
+                          disabled={busyAction !== null}
+                          className="min-h-11 rounded-xl bg-amber-300 px-4 text-sm font-bold text-slate-950 transition hover:bg-amber-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {isBusy && busyAction.action === "block"
+                            ? "Blocking…"
+                            : "Confirm block"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busyAction !== null}
+                          onClick={() => setBlockSelection(null)}
+                          className="min-h-11 rounded-xl border border-white/15 px-4 text-sm font-semibold text-white hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-white disabled:opacity-60"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  ) : null}
                 </article>
               </li>
             );

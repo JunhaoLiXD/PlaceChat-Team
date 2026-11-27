@@ -30,6 +30,32 @@ Junhao provisions Supabase email/password users and their `admin_users` entries.
 
 The admin migration is newer than `20261021031518_create_messages.sql` from PR #44. Coordinate merge/deployment ordering with Junhao so any older pending migrations are applied first. Do not edit merged migrations or push migrations to staging from a development machine.
 
+## Temporary sender blocks (PBI-42)
+
+`POST /api/v1/admin/blocks` requires `require_admin` and accepts only `report_id` and
+`duration_minutes` (15, 60, or 1440, restricted by `BLOCK_DURATION_OPTIONS_MINUTES`).
+The server resolves the report's message and blocks its sender's Supabase session,
+never the reporter, nickname, or IP address. The 200 response contains `id`,
+`created_at`, and `expires_at`, without session identifiers. The report and message
+remain available for separate removal or dismissal; retained reports still identify
+senders after those actions. A repeated block cannot shorten an existing block.
+
+Pipeline step 2 rejects that session in every room with HTTP 403 and
+`{"error":{"code":"BLOCKED","message":"…","until":"<ISO timestamp>"}}` while
+`expires_at > now`. Exactly at expiration, sending is allowed again without deleting
+the audit record or running a cleanup job. Rejected messages are neither stored nor
+broadcast. The composer expiry display and automatic re-enable behavior belong to
+PBI-43 (#78).
+
+`20261127000000_create_blocks.sql` adds the audit table and session/expiration index,
+with RLS enabled and no browser policies. Apply it through the reviewed migration
+workflow before deploying this backend. `tests/test_blocks.py` exercises the real
+admin allow-list and send pipeline on SQLite and disposable PostgreSQL, including
+cross-room rejection and the exact expiry boundary. `tests/test_blocks_postgres.py`
+checks migration defaults, constraints, and RLS for both browser roles with ordinary
+table privileges granted. Use the disposable local `TEST_DATABASE_URL` setup below;
+these tests never use `DATABASE_URL`.
+
 ## Room membership
 
 `POST /api/v1/rooms/{room_id}/join`, `POST /api/v1/rooms/{room_id}/heartbeat`, and `POST /api/v1/rooms/{room_id}/leave` require a Bearer token verified by `get_current_session()`. The caller's session ID comes from that token, never the request body. Join returns `{room: {id, name, description}, nickname}`; heartbeat and leave return `{status: "ok"}`. Missing or archived rooms return `ROOM_NOT_FOUND` (404). Heartbeat or leave without a joined membership (including an already-left membership) returns `NOT_A_MEMBER` (403).

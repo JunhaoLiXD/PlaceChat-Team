@@ -1,4 +1,4 @@
-"""Message reporting request and response bodies."""
+"""Safety request and response bodies."""
 
 from datetime import datetime
 from typing import Annotated, Literal
@@ -38,6 +38,31 @@ class AdminReportResponse(ReportResponse):
 
     message: MessageResponse
     room: JoinedRoom
+
+
+class BlockCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    report_id: UUID
+    duration_minutes: Literal[15, 60, 1440]
+
+    @field_validator("duration_minutes", mode="before")
+    @classmethod
+    def allowed_duration(cls, value: object) -> object:
+        options = get_settings().block_duration_options_minutes
+        if type(value) is not int or value not in options:
+            raise ValueError(f"must be one of {options} minutes")
+        return value
+
+
+class BlockResponse(BaseModel):
+    """Confirmation without exposing a sender's cross-room identity."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    created_at: datetime
+    expires_at: datetime
 
 
 BlockedWordText = Annotated[

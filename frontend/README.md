@@ -30,6 +30,21 @@ Call `getAccessToken()` immediately before each authenticated API request rather
 
 Provisioned administrators sign in with email and password at `/admin/login`. The login form uses Supabase Auth, then verifies administrator access through the protected API before opening `/admin/rooms`. The room page lists active and archived rooms and supports creating, editing, and archiving active rooms. Browser-side checks are only user guidance; every admin API operation independently verifies the Bearer token and the database allow-list.
 
+On `/admin/reports`, **Block sender** opens a duration selector with **15 minutes**,
+**1 hour**, and **24 hours**. Confirming uses the protected API and displays the
+effective expiration in Eastern Time. Blocking applies across all rooms and leaves
+the report available for separate removal or dismissal. Controls stay disabled while
+the request is pending; failures are shown with retry available. The chat composer's
+expiry display and automatic re-enable behavior remain in PBI-43 (#78).
+
+**Pending live check after deployment:** In two independent browser profiles, have a
+sender join two rooms and post in one. Report that message from the other profile.
+As an administrator, block its sender from Reports with a chosen duration and check
+the confirmation. In the sender's profile, posting in either joined room must return
+403 `BLOCKED` with `error.until`; the reporter must still be able to send. Confirm
+the sender's API request succeeds after expiration. Automated tests control the
+clock to cover the exact boundary without waiting 15 minutes.
+
 Opening `/rooms/[roomId]` loads that room and rejoins with the persisted session, displaying the nickname returned by the backend. Refreshing, closing/reopening a tab in the same browser profile, disconnecting, and React cleanup never sign out, clear stored authentication, or send Leave. The backend retains a nickname through exactly 60 seconds after the last successful join/heartbeat while `left_at` is null; after that, it assigns a different name. A different browser profile/private session has its own identity.
 
 Each room visit enables Send and starts one 15-second heartbeat only after its own join succeeds, even when a kept-alive Activity preserves an old nickname and draft. Direct submissions are also guarded. A failed join shows its error and keeps sending/heartbeats disabled. Cleanup stops the timer and unsubscribes from Realtime; cancelled joins/history and late channel events are ignored. Count-only updates do not rejoin.
