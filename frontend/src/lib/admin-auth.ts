@@ -4,6 +4,8 @@ import type { Session } from "@supabase/supabase-js";
 
 import { getSupabaseBrowserClient } from "@/lib/supabase";
 
+export const ADMIN_SIGNED_OUT_EVENT = "placechat:admin-signed-out";
+
 export async function signInWithPassword(
   email: string,
   password: string,
@@ -22,4 +24,5 @@ export async function signInWithPassword(
 export async function signOutAdmin(): Promise<void> {
   const { error } = await getSupabaseBrowserClient().auth.signOut();
   if (error) throw error;
+  window.dispatchEvent(new Event(ADMIN_SIGNED_OUT_EVENT));
 }

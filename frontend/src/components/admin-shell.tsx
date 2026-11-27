@@ -8,6 +8,7 @@ import { signOutAdmin } from "@/lib/admin-auth";
 
 const ADMIN_LINKS = [
   { href: "/admin/rooms", label: "Rooms" },
+  { href: "/admin/reports", label: "Reports" },
   { href: "/admin/words", label: "Words" },
 ];
 
@@ -87,6 +88,30 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             ) : null}
           </div>
         </div>
+        {!isLogin ? (
+          <nav
+            aria-label="Admin navigation mobile"
+            className="mx-auto flex w-full max-w-7xl border-t border-white/10 px-5 sm:hidden"
+          >
+            {ADMIN_LINKS.map((link) => {
+              const isCurrent = pathname === link.href;
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  aria-current={isCurrent ? "page" : undefined}
+                  className={`flex min-h-11 flex-1 items-center justify-center border-b-2 text-sm font-semibold ${
+                    isCurrent
+                      ? "border-violet-400 text-white"
+                      : "border-transparent text-slate-400"
+                  }`}
+                >
+                  {link.label}
+                </Link>
+              );
+            })}
+          </nav>
+        ) : null}
       </header>
       {children}
     </div>
