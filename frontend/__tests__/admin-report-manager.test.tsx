@@ -6,6 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { Activity } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import {
@@ -14,7 +15,7 @@ import {
 } from "@/components/admin-report-manager";
 import { ADMIN_SIGNED_OUT_EVENT } from "@/lib/admin-auth";
 import { ApiRequestError } from "@/lib/placechat-api";
-import type { AdminReport } from "@/lib/placechat-types";
+import type { AdminReport, SenderBlock } from "@/lib/placechat-types";
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
@@ -64,19 +65,44 @@ const secondReport: AdminReport = {
   room: { id: "room-2", name: "Reitz Union", description: "Student union." },
 };
 
+const senderBlock: SenderBlock = {
+  id: "block-1",
+  created_at: "2026-11-27T14:00:00Z",
+  expires_at: "2026-11-27T15:00:00Z",
+};
+
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.list.mockResolvedValue([firstReport, secondReport]);
   mocks.remove.mockResolvedValue(undefined);
   mocks.dismiss.mockResolvedValue(undefined);
-  mocks.block.mockResolvedValue({
-    id: "block-1",
-    created_at: "2026-11-27T14:00:00Z",
-    expires_at: "2026-11-27T15:00:00Z",
-  });
+  mocks.block.mockResolvedValue(senderBlock);
 });
 
 afterEach(cleanup);
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+async function renderReports() {
+  const view = render(<AdminReportManager />);
+  await screen.findByText("An unsafe message");
+  return view;
+}
+
+function confirmBlock(nickname = "Quiet Otter") {
+  fireEvent.click(
+    screen.getByRole("button", { name: `Block sender ${nickname}` }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Confirm block" }));
+}
 
 test("lists pending reports and schedules a 30-second refresh", async () => {
   const intervalSpy = vi.spyOn(window, "setInterval");
@@ -263,18 +289,10 @@ test("shows block failures and permits retrying with the selected duration", asy
 });
 
 test("locks moderation controls while a block is pending", async () => {
-  let resolve!: (block: { expires_at: string }) => void;
-  mocks.block.mockReturnValueOnce(
-    new Promise((done) => {
-      resolve = done;
-    }),
-  );
-  render(<AdminReportManager />);
-  await screen.findByText("An unsafe message");
-  fireEvent.click(
-    screen.getByRole("button", { name: "Block sender Calm Fox" }),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Confirm block" }));
+  const pending = deferred<SenderBlock>();
+  mocks.block.mockReturnValueOnce(pending.promise);
+  await renderReports();
+  confirmBlock("Calm Fox");
   expect(screen.getByRole("button", { name: "Blocking…" })).toHaveProperty(
     "disabled",
     true,
@@ -284,7 +302,7 @@ test("locks moderation controls while a block is pending", async () => {
     screen.getByRole("button", { name: "Remove message from Quiet Otter" }),
   ).toHaveProperty("disabled", true);
   expect(mocks.block).toHaveBeenCalledTimes(1);
-  await act(async () => resolve({ expires_at: "2026-11-27T15:00:00Z" }));
+  await act(async () => pending.resolve(senderBlock));
   expect(screen.getByRole("status").textContent).toMatch(
     /^Calm Fox is blocked/,
   );
@@ -328,21 +346,85 @@ test("refreshes a missing report and explains the failed block", async () => {
 });
 
 test("ignores a late block result after administrator sign-out", async () => {
-  let resolve!: (block: { expires_at: string }) => void;
-  mocks.block.mockReturnValueOnce(
-    new Promise((done) => {
-      resolve = done;
-    }),
-  );
-  render(<AdminReportManager />);
-  await screen.findByText("An unsafe message");
-  fireEvent.click(
-    screen.getByRole("button", { name: "Block sender Quiet Otter" }),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Confirm block" }));
+  const pending = deferred<SenderBlock>();
+  mocks.block.mockReturnValueOnce(pending.promise);
+  await renderReports();
+  confirmBlock();
   mocks.list.mockRejectedValueOnce(new ApiRequestError("Signed out", 401));
   act(() => window.dispatchEvent(new Event(ADMIN_SIGNED_OUT_EVENT)));
   await screen.findByRole("heading", { name: "Not authorized" });
-  await act(async () => resolve({ expires_at: "2026-11-27T15:00:00Z" }));
+  await act(async () => pending.resolve(senderBlock));
   expect(screen.queryByRole("status")).toBeNull();
 });
+
+test.each([
+  ["block", "success"],
+  ["remove", "success"],
+  ["dismiss", "success"],
+  ["block", "error"],
+  ["remove", "error"],
+  ["dismiss", "error"],
+] as const)(
+  "reopening Reports after a pending %s resets controls and ignores its late %s",
+  async (action, outcome) => {
+    const oldRequest = deferred<SenderBlock | undefined>();
+    mocks[action].mockReturnValueOnce(oldRequest.promise);
+    const page = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <AdminReportManager />
+      </Activity>
+    );
+    const view = render(page("visible"));
+    await screen.findByText("An unsafe message");
+    if (action === "block") {
+      confirmBlock();
+    } else {
+      fireEvent.click(
+        screen.getByRole("button", {
+          name:
+            action === "remove"
+              ? "Remove message from Quiet Otter"
+              : "Dismiss report for Quiet Otter",
+        }),
+      );
+    }
+    expect(mocks[action]).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole("button", { name: "Block sender Quiet Otter" }),
+    ).toHaveProperty("disabled", true);
+
+    view.rerender(page("hidden"));
+    view.rerender(page("visible"));
+    await waitFor(() => {
+      expect(mocks.list).toHaveBeenCalledTimes(2);
+      for (const button of screen.getAllByRole("button"))
+        expect(button).toHaveProperty("disabled", false);
+    });
+
+    // An old completion must not clear a different action in the reopened visit.
+    const currentRequest = deferred<void>();
+    mocks.dismiss.mockReturnValueOnce(currentRequest.promise);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Dismiss report for Calm Fox" }),
+    );
+    await act(async () => {
+      if (outcome === "error")
+        oldRequest.reject(new ApiRequestError("Old access denied", 403));
+      else oldRequest.resolve(senderBlock);
+    });
+    expect(screen.getByText("An unsafe message")).toBeDefined();
+    expect(screen.getByText("Another reported message")).toBeDefined();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Dismiss report for Calm Fox" }),
+    ).toHaveProperty("disabled", true);
+
+    await act(async () => currentRequest.resolve());
+    expect(screen.queryByText("Another reported message")).toBeNull();
+    expect(screen.getByText("1 pending")).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Block sender Quiet Otter" }),
+    ).toHaveProperty("disabled", false);
+  },
+);

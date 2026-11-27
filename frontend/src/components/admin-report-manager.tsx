@@ -112,6 +112,8 @@ export function AdminReportManager() {
       void loadReports();
     };
     const initialRequest = window.setTimeout(() => {
+      // Activity preserves state, but the previous visit no longer owns an action.
+      setBusyAction(null);
       void loadReports();
     }, 0);
     const interval = window.setInterval(() => {
