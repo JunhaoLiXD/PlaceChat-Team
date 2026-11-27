@@ -103,6 +103,7 @@ def pg_engine() -> Iterator[Engine]:
                 "20261109120000_create_room_presence_counts.sql",
                 "20261116100000_create_reports.sql",
                 "20261116200000_create_blocked_words.sql",
+                "20261127000000_create_blocks.sql",
             ):
                 connection.exec_driver_sql((migrations / migration).read_text(encoding="utf-8"))
             # Exercise RLS itself, even when ordinary table privileges are granted.

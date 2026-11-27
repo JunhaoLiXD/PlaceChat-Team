@@ -11,8 +11,12 @@ const session = vi.hoisted(() => ({
 
 vi.mock("@/lib/session", () => session);
 
-const { dismissAdminReport, listAdminReports, removeReportedMessage } =
-  await import("@/lib/placechat-api");
+const {
+  blockReportedSender,
+  dismissAdminReport,
+  listAdminReports,
+  removeReportedMessage,
+} = await import("@/lib/placechat-api");
 
 const fetchMock = vi.fn<typeof fetch>();
 
@@ -60,3 +64,25 @@ test("uses the remove-message and dismiss actions", async () => {
   expectAuthorizedPost("/api/v1/admin/reports/report-1/remove-message", 0);
   expectAuthorizedPost("/api/v1/admin/reports/report-2/dismiss", 1);
 });
+
+test.each([15, 60, 1440] as const)(
+  "blocks by report ID with a %i-minute duration",
+  async (minutes) => {
+    const block = {
+      id: "block-1",
+      created_at: "2026-11-27T12:00:00Z",
+      expires_at: "2026-11-28T12:00:00Z",
+    };
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(block), { status: 200 }),
+    );
+    await expect(blockReportedSender("report-1", minutes)).resolves.toEqual(
+      block,
+    );
+    expectAuthorizedPost("/api/v1/admin/blocks", 0);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      report_id: "report-1",
+      duration_minutes: minutes,
+    });
+  },
+);

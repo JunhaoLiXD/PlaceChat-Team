@@ -6,12 +6,14 @@ import type {
   AdminRoomCreate,
   AdminRoomUpdate,
   ApiErrorBody,
+  BlockDurationMinutes,
   BlockedWord,
   ChatMessage,
   HistoryMessage,
   JoinRoomResult,
   ReportReason,
   RoomSummary,
+  SenderBlock,
 } from "@/lib/placechat-types";
 import { getAccessToken } from "@/lib/session";
 
@@ -144,6 +146,20 @@ export async function removeReportedMessage(reportId: string): Promise<void> {
 export async function dismissAdminReport(reportId: string): Promise<void> {
   await apiFetch<unknown>(`/api/v1/admin/reports/${reportId}/dismiss`, {
     method: "POST",
+    auth: true,
+  });
+}
+
+export async function blockReportedSender(
+  reportId: string,
+  durationMinutes: BlockDurationMinutes,
+): Promise<SenderBlock> {
+  return apiFetch<SenderBlock>("/api/v1/admin/blocks", {
+    method: "POST",
+    body: JSON.stringify({
+      report_id: reportId,
+      duration_minutes: durationMinutes,
+    }),
     auth: true,
   });
 }

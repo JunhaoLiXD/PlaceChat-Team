@@ -10,6 +10,8 @@ export type AdminRoom = Schemas["AdminRoomResponse"];
 export type AdminRoomCreate = Schemas["RoomCreate"];
 export type AdminRoomUpdate = Schemas["RoomUpdate"];
 export type AdminReport = Schemas["AdminReportResponse"];
+export type SenderBlock = Schemas["BlockResponse"];
+export type BlockDurationMinutes = Schemas["BlockCreate"]["duration_minutes"];
 export type BlockedWord = Schemas["BlockedWordResponse"];
 
 /** `POST /rooms/{id}/join`. The page already has the room from the list; it uses the nickname. */

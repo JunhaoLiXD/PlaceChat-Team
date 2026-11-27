@@ -20,6 +20,17 @@ class BlockedWord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class Block(Base):
+    __tablename__ = "blocks"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    session_id: Mapped[UUID] = mapped_column(Uuid)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[UUID] = mapped_column(Uuid)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Report(Base):
     __tablename__ = "reports"
     __table_args__ = (UniqueConstraint("message_id", "reporter_session_id"),)
