@@ -15,6 +15,7 @@ import { useRouter } from "next/navigation";
 import { shouldUseMocks } from "@/lib/config";
 import { mergeMessages } from "@/lib/messages";
 import {
+  ApiRequestError,
   heartbeatRoom,
   joinRoom,
   leaveRoom,
@@ -33,6 +34,12 @@ import { type RoomChannelStatus, useRoomChannel } from "@/lib/use-room-channel";
 
 const MESSAGE_MAX_LENGTH = 500;
 const HEARTBEAT_INTERVAL_MS = 15_000;
+
+type BlockNotice = {
+  roomId: string;
+  expiresAt: number;
+  message: string;
+};
 
 const DEMO_MESSAGES: ChatMessage[] = [
   {
@@ -372,6 +379,9 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
   );
   const [draft, setDraft] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
+  const [blockNotice, setBlockNotice] = useState<BlockNotice | null>(null);
+  const blockRef = useRef<BlockNotice | null>(null);
+  const currentBlock = blockNotice?.roomId === room.id ? blockNotice : null;
   const [isSending, setIsSending] = useState(false);
   const [isLeaving, setIsLeaving] = useState(false);
   const visitRef = useRef<{
@@ -379,6 +389,7 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     active: boolean;
     joined: boolean;
     recovery: ReturnType<typeof createRoomRecovery>;
+    block: (expiresAt: number, message: string) => void;
     stop: () => void;
   } | null>(null);
   const router = useRouter();
@@ -392,7 +403,8 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
     messageLength > 0 &&
     !isTooLong &&
     !isSending &&
-    !isLeaving;
+    !isLeaving &&
+    !currentBlock;
 
   const participantLabel = useMemo(
     () =>
@@ -439,6 +451,27 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
 
   useEffect(() => {
     let interval: number | undefined;
+    let blockTimer: number | undefined;
+    function refreshBlock() {
+      if (!visit.active || visitRef.current !== visit) return;
+      window.clearTimeout(blockTimer);
+      const notice = blockRef.current;
+      if (notice?.roomId !== room.id) return;
+      const remaining = notice.expiresAt - Date.now();
+      if (remaining <= 0) {
+        blockRef.current = null;
+        setBlockNotice(null);
+      } else {
+        // Recheck the clock when firing; long deadlines must not overflow setTimeout.
+        blockTimer = window.setTimeout(
+          refreshBlock,
+          Math.min(remaining, 2_147_483_647),
+        );
+      }
+    }
+    function handleVisibility() {
+      if (document.visibilityState === "visible") refreshBlock();
+    }
     const recovery = createRoomRecovery(
       room.id,
       (incoming) =>
@@ -455,17 +488,29 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
       active: true,
       joined: false,
       recovery,
+      block(expiresAt: number, message: string) {
+        const notice = { roomId: room.id, expiresAt, message };
+        blockRef.current = notice;
+        setBlockNotice(notice);
+        refreshBlock();
+      },
       stop() {
         visit.active = false;
         visit.joined = false;
         recovery.stop();
         window.clearInterval(interval);
+        window.clearTimeout(blockTimer);
+        document.removeEventListener("visibilitychange", handleVisibility);
         setHasJoined(false);
         setIsSending(false);
         setOwnMessageIds(new Set());
       },
     };
     visitRef.current = visit;
+    document.addEventListener("visibilitychange", handleVisibility);
+    // A kept-alive page may return after its timer was cancelled or throttled.
+    if (blockRef.current?.roomId === room.id)
+      blockTimer = window.setTimeout(refreshBlock, 0);
     const request = joinRoom(room.id);
 
     // This also runs when Next shows a kept-alive page again (React <Activity>),
@@ -514,7 +559,9 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
 
   const handleSubmit = async (event?: FormEvent) => {
     event?.preventDefault();
-    if (isLeaving) return;
+    if (isLeaving || isSending) return;
+    const notice = blockRef.current;
+    if (notice?.roomId === room.id && notice.expiresAt > Date.now()) return;
     setSendError(null);
 
     if (messageLength === 0) return;
@@ -551,6 +598,17 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
       setDraft("");
     } catch (caught) {
       if (!visit.active || visitRef.current !== visit) return;
+      if (
+        caught instanceof ApiRequestError &&
+        caught.status === 403 &&
+        caught.code === "BLOCKED"
+      ) {
+        const expiresAt = Date.parse(caught.until ?? "");
+        if (expiresAt > Date.now()) {
+          visit.block(expiresAt, caught.message);
+          return;
+        }
+      }
       setSendError(
         caught instanceof Error
           ? caught.message
@@ -755,7 +813,20 @@ export function ChatRoom({ room }: { room: RoomSummary }) {
             </form>
 
             <div id="message-error" className="min-h-5 px-1 pt-1.5">
-              {isTooLong ? (
+              {currentBlock ? (
+                <p role="alert" className="text-xs font-medium text-rose-600">
+                  {currentBlock.message} You can send again at{" "}
+                  <time
+                    dateTime={new Date(currentBlock.expiresAt).toISOString()}
+                  >
+                    {new Intl.DateTimeFormat(undefined, {
+                      dateStyle: "medium",
+                      timeStyle: "long",
+                    }).format(currentBlock.expiresAt)}
+                  </time>
+                  .
+                </p>
+              ) : isTooLong ? (
                 <p role="alert" className="text-xs font-medium text-rose-600">
                   Messages can be up to {MESSAGE_MAX_LENGTH} characters after
                   trimming.
